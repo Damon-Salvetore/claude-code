@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tail *)",
+      "Bash(head *)",
+      "Bash(wc *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(ps *)",
+      "Bash(nvidia-smi*)",
+      "Bash(kill *)",
+      "Bash(sleep *)",
+      "Bash(mkdir *)",
+      "Bash(chmod *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(echo *)",
+      "Bash(date *)",
+      "Bash(pgrep *)",
+      "Bash(pkill *)",
+      "Bash(xargs *)",
+      "Bash(rm *)",
+      "Bash(bash scripts/*)",
+      "Bash(nohup bash scripts/*)",
+      "Bash(python scripts/*)",
+      "Bash(python3 scripts/*)",
+      "Bash(nohup python scripts/*)",
+      "Bash(nohup python3 scripts/*)",
+      "Bash(bash -n *)",
+      "Bash(python3 -c *)",
+      "Bash(python3 -m py_compile *)",
+      "Bash(python3 << *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ],
+    "deny": []
+  }
+}

@@ -1,0 +1,35 @@
+import math
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import nnscaler
+
+from .linear import MixPrecisionLinear
+
+@torch.compile
+def swiglu(x: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+    return x * F.silu(gate)
+
+nnscaler.register_op('l d, l d -> l d')(swiglu)
+
+class FeedForwardNetwork(nn.Module):
+    def __init__(
+        self,
+        embed_dim,
+        ffn_dim
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.up_proj = MixPrecisionLinear(self.embed_dim, ffn_dim, bias=False)
+        self.down_proj = MixPrecisionLinear(ffn_dim, self.embed_dim, bias=False)
+        self.gate_proj = MixPrecisionLinear(self.embed_dim, ffn_dim, bias=False)
+        self.init_weights()
+
+    def init_weights(self):
+        nn.init.kaiming_uniform_(self.up_proj.weight, a=math.sqrt(5), mode='fan_in')
+        nn.init.kaiming_uniform_(self.gate_proj.weight, a=math.sqrt(5), mode='fan_in')
+        nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5), mode='fan_out')
+
+    def forward(self, x):
+        return self.down_proj(swiglu(self.up_proj(x), self.gate_proj(x)))

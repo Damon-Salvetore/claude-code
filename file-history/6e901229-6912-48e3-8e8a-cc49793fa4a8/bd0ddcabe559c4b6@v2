@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# 串行重跑 Base-0.4B 的 nvfp4 (mode=1) 和 nvfp4_full (mode=2)
+# 使用更新后的 nvfp4_quant.py（含 FP8 scale 伪量化）
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "============================================="
+echo "  Base-0.4B Re-run: nvfp4 + nvfp4_full"
+echo "  Start: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "============================================="
+
+echo ""
+echo "[1/2] Base-0.4B nvfp4 (mode=1, FFN only)"
+echo "Start: $(date '+%Y-%m-%d %H:%M:%S')"
+bash "${SCRIPT_DIR}/run_single.sh" Base-0.4B nvfp4 && echo "DONE" || echo "FAILED with $?"
+
+echo ""
+echo "[2/2] Base-0.4B nvfp4_full (mode=2, FFN+QKVO)"
+echo "Start: $(date '+%Y-%m-%d %H:%M:%S')"
+bash "${SCRIPT_DIR}/run_single.sh" Base-0.4B nvfp4_full && echo "DONE" || echo "FAILED with $?"
+
+echo ""
+echo "============================================="
+echo "  All done!"
+echo "  End: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "============================================="

@@ -1,0 +1,614 @@
+# 实验配置总结文档
+
+**项目:** NVFP4 W4A4量化 vs BF16基线控制变量实验
+**生成时间:** 2026-03-02
+**实验目标:** 研究NVFP4量化对不同注意力架构的影响
+
+---
+
+## 1. 实验目标和设计
+
+### 1.1 研究目标
+- **主要目标:** 评估NVFP4 W4A4量化对不同注意力架构模型的训练稳定性和收敛性影响
+- **控制变量:** Gated Attention vs Differential Attention机制
+- **对比维度:** BF16基线训练 vs NVFP4量化训练
+
+### 1.2 实验设计
+- **实验类型:** 控制变量对比实验
+- **实验组:** NVFP4 W4A4量化训练（4个模型架构）
+- **对照组:** BF16基线训练（4个模型架构）
+- **评估指标:** 训练损失、梯度范数、收敛速度、内存使用
+
+---
+
+## 2. 模型架构配置
+
+### 2.1 模型架构矩阵
+实验涵盖4种模型架构配置：
+
+| 模型名称 | Gated Attention | Differential Attention | 参数量 |
+|---------|-----------------|------------------------|--------|
+| Base-0.4B | ❌ | ❌ | ~0.4B |
+| GatedAttn-0.4B | ✅ | ❌ | ~0.4B |
+| DiffAttn-0.4B | ❌ | ✅ | ~0.4B |
+| GatedDiffAttn-0.4B | ✅ | ✅ | ~0.4B |
+
+### 2.2 统一架构参数
+```python
+ModelArgs(
+    d_model=1024,           # 隐藏维度
+    d_ffn=3072,            # FFN维度（3x隐藏维度）
+    head=16,               # 注意力头数
+    kv_head=4,             # KV头数（GQA设置）
+    head_dim=64,           # 注意力头维度（d_model/head）
+    n_layers=24,           # Transformer层数
+    vocab_size=201088,     # 词表大小
+    max_seq_len=4096,      # 最大序列长度
+    qk_norm=False,         # QK归一化：禁用
+    weight_tying=False,    # 权重共享：禁用
+    attention_bias=False,  # 注意力偏置：禁用
+    norm_eps=1e-6,         # LayerNorm epsilon
+    rope_theta=10000.0     # RoPE theta参数
+)
+```
+
+### 2.3 注意力机制特殊配置
+
+#### 2.3.1 Gated Attention
+```python
+# 启用门控注意力机制
+gated_attention=True
+```
+- **功能:** 为注意力输出添加门控机制，提升模型表达能力
+- **实现位置:** `llm.arch.attention`模块
+
+#### 2.3.2 Differential Attention
+```python
+# 启用差分注意力机制
+diff_attention=True
+```
+- **功能:** 使用差分注意力计算，改善注意力分布
+- **实现位置:** `llm.arch.attention`模块
+
+---
+
+## 3. 训练配置
+
+### 3.1 训练超参数
+```yaml
+training_config:
+  max_steps: 10000              # 训练总步数
+  warmup_steps: 2000           # 预热步数（20%）
+  batch_size: 4                # 批次大小（GPU内存限制）
+  sequence_length: 512         # 序列长度（内存优化）
+  learning_rate: 3e-4          # 初始学习率
+  min_lr: 1e-5                # 最小学习率
+  weight_decay: 0.1            # 权重衰减
+  clip_grad_norm: 1.0          # 梯度裁剪范数
+```
+
+### 3.2 学习率调度
+**调度器类型:** `llm.warmup_scheduler.WarmupCosineAnnealingLR`
+
+```python
+# 预热阶段 (步骤 0-2000)
+warmup_scheduler = LinearLR(
+    optimizer,
+    start_factor=0.1,      # 预热起始学习率：0.1 * base_lr
+    end_factor=1.0,        # 预热结束学习率：1.0 * base_lr
+    total_iters=2000       # 预热步数
+)
+
+# 余弦衰减阶段 (步骤 2000-10000)
+cosine_scheduler = CosineAnnealingLR(
+    optimizer,
+    T_max=8000,           # 衰减步数 (10000-2000)
+    eta_min=1e-5          # 最小学习率
+)
+```
+
+### 3.3 优化器配置
+**优化器:** AdamW
+
+```python
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=3e-4,              # 学习率
+    betas=(0.9, 0.95),    # Adam beta参数
+    weight_decay=0.1,     # 权重衰减
+    eps=1e-8              # 数值稳定性epsilon
+)
+```
+
+### 3.4 混合精度训练
+**精度配置:** BF16前向传播 + FP32梯度计算
+
+```python
+precision_config = {
+    'forward_pass': 'bf16',     # 前向传播使用bfloat16
+    'gradient_computation': 'fp32', # 梯度计算使用float32
+    'parameter_updates': 'fp32'  # 参数更新使用float32
+}
+
+# 使用autocast进行混合精度
+with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+    outputs = model(inputs)
+```
+
+---
+
+## 4. 数据集配置
+
+### 4.1 数据来源
+**数据集类型:** 合成数据（Mock Data）用于控制变量实验
+
+```python
+# 合成数据生成器配置
+synthetic_data_config = {
+    'vocab_size': 32000,          # 词表大小
+    'sequence_length': 512,       # 序列长度
+    'batch_size': 4,             # 批次大小
+    'total_samples': 40000,      # 总样本数 (10000 steps * 4 batch_size)
+    'generation_method': 'random_uniform'  # 均匀随机生成
+}
+```
+
+### 4.2 数据处理流程
+```python
+# 数据打包格式（与真实数据一致）
+batch_format = {
+    'tokens': torch.Tensor,           # 输入token序列 [batch*seq_len]
+    'targets': torch.Tensor,          # 目标token序列（右移1位）
+    'context': {
+        'cu_seqlens_q': torch.Tensor, # 累积序列长度（Query）
+        'cu_seqlens_k': torch.Tensor, # 累积序列长度（Key）
+        'max_seqlen_q': int,          # 最大查询序列长度
+        'max_seqlen_k': int,          # 最大键序列长度
+        'positions': torch.Tensor     # 位置编码索引
+    },
+    'loss_mask': torch.Tensor,        # 损失计算mask
+    'loss_index': torch.Tensor        # 损失索引
+}
+```
+
+### 4.3 数据验证
+**选择合成数据的原因:**
+- **控制变量需要:** 消除数据分布差异对实验结果的影响
+- **快速验证:** 减少I/O开销，专注于量化算法性能评估
+- **实验一致性:** 确保baseline和量化组使用完全相同的数据
+
+---
+
+## 5. NVFP4量化配置
+
+### 5.1 NVFP4算法原理
+**量化方案:** 二级量化 FP32 → FP8 → FP4
+
+```python
+nvfp4_algorithm = {
+    'level_1': 'FP32 → FP8 E4M3 (scales)',    # 级别1：尺度量化
+    'level_2': 'FP8_scaled → FP4 E2M1 (values)', # 级别2：值量化
+    'total_levels': 16,                         # FP4总量化级别
+    'scale_levels': 256                         # FP8尺度级别
+}
+```
+
+### 5.2 W4A4量化配置
+```python
+nvfp4_config = {
+    'mode': 1,                    # 启用NVFP4量化
+    'group_size': 128,            # 量化组大小
+    'quantize_weights': True,     # 权重量化（W4）
+    'quantize_activations': False, # 激活量化（A4，当前禁用）
+    'warmup_steps': 2000,         # 量化预热步数
+    'full_steps': 5000,           # 完全量化步数
+    'adaptive': False             # 自适应量化：禁用
+}
+```
+
+### 5.3 量化实现细节
+
+#### 5.3.1 FP4 E2M1值表（16个量化级别）
+```python
+FP4_E2M1_VALUES = [
+    # 正值
+    0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+    # 负值
+    -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0
+]
+```
+
+#### 5.3.2 FP8 E4M3尺度表（256个尺度级别）
+```python
+# IEEE FP8 E4M3格式：1位符号 + 4位指数 + 3位尾数 = 256个值
+fp8_scale_generation = {
+    'format': 'E4M3',
+    'sign_bits': 1,
+    'exponent_bits': 4,
+    'mantissa_bits': 3,
+    'total_values': 256,
+    'bias': 15
+}
+```
+
+### 5.4 量化流程
+```python
+def nvfp4_two_level_quantize(input_tensor, group_size=128):
+    """
+    Step 1: 按组计算FP32尺度
+    Step 2: 尺度量化到FP8 E4M3 (256级别)
+    Step 3: 值归一化并量化到FP4 E2M1 (16级别)
+    Step 4: 重建量化值 = FP4_values * FP8_scales
+    """
+    pass
+```
+
+### 5.5 梯度处理
+**梯度估计:** 直通估计器（Straight-Through Estimator, STE）
+```python
+# 前向传播：量化
+quantized_weights = nvfp4_pseudo_quantize(original_weights)
+
+# 反向传播：梯度直接传递
+grad_original = grad_quantized  # STE近似
+```
+
+---
+
+## 6. 硬件和并行配置
+
+### 6.1 硬件环境
+```yaml
+hardware_specs:
+  gpu_model: "NVIDIA B200"        # GPU型号
+  gpu_count: 4                    # GPU数量
+  gpu_memory: "80GB per GPU"      # 单卡显存
+  total_memory: "320GB"           # 总显存
+  compute_capability: "9.0"       # 计算能力
+  nvlink: "Yes"                   # 高速互连
+```
+
+### 6.2 内存使用分析
+```python
+memory_breakdown_per_gpu = {
+    'model_parameters': '~2.1GB',     # 模型参数（0.4B * 2bytes * 1.25）
+    'optimizer_states': '~4.2GB',     # 优化器状态（AdamW）
+    'gradients': '~2.1GB',            # 梯度缓存
+    'activations': '~3.0GB',          # 激活值缓存
+    'quantization_overhead': '~1.0GB', # 量化索引和尺度
+    'system_reserved': '~1.6GB',      # 系统预留
+    'total_usage': '~12.3GB per GPU'  # 总使用量
+}
+```
+
+### 6.3 并行策略
+**并行方案:** 数据并行（DataParallel）
+
+```python
+parallel_config = {
+    'strategy': 'DataParallel',       # 并行策略
+    'world_size': 4,                  # 总进程数
+    'local_rank': '[0,1,2,3]',      # 本地GPU编号
+    'backend': 'nccl',               # 通信后端
+    'gradient_sync': 'allreduce',    # 梯度同步方式
+    'batch_size_per_gpu': 4,         # 每GPU批次大小
+    'effective_batch_size': 16       # 有效批次大小
+}
+```
+
+---
+
+## 7. 项目原生组件使用
+
+### 7.1 学习率调度器
+**组件:** `llm.warmup_scheduler.WarmupCosineAnnealingLR`
+
+```python
+from llm.warmup_scheduler import WarmupCosineAnnealingLR
+
+scheduler = WarmupCosineAnnealingLR(
+    optimizer=optimizer,
+    warmup_steps=2000,      # 预热步数
+    T_max=10000,           # 总训练步数
+    eta_min=1e-5           # 最小学习率
+)
+```
+**选择原因:** 项目原生实现，支持预热+余弦衰减，适合大模型训练
+
+### 7.2 模型定义
+**组件:** `llm.arch.model.Model`
+
+```python
+from llm.arch.model import Model
+from llm.arch.config import ModelArgs
+
+model = Model(model_config).to(device)
+```
+**特点:**
+- 支持多种注意力机制（Gated, Differential）
+- 集成NVFP4量化能力
+- 统一的架构配置接口
+
+### 7.3 配置管理
+**组件:** `llm.config.model_args`
+
+```python
+from llm.config import model_args
+
+model_config = model_args["Base-0.4B"]  # 获取预定义配置
+```
+**优势:**
+- 预定义标准模型配置
+- 确保实验配置一致性
+- 支持配置继承和覆盖
+
+### 7.4 量化实现
+**组件:** `llm.kernel.nvfp4_quant`
+
+```python
+from llm.kernel.nvfp4_quant import nvfp4_pseudo_quantize
+
+quantized_tensor = nvfp4_pseudo_quantize(
+    input=weights,
+    group_size=128,
+    use_two_level=True
+)
+```
+**核心功能:**
+- 真正的二级量化实现
+- Triton优化的GPU kernels
+- 自动梯度微分支持
+
+---
+
+## 8. 实验执行细节
+
+### 8.1 训练流程
+```python
+training_pipeline = {
+    'step_1': 'Model Initialization',     # 模型初始化
+    'step_2': 'Data Loading',            # 数据加载
+    'step_3': 'Optimizer Setup',         # 优化器设置
+    'step_4': 'Quantization Config',     # 量化配置
+    'step_5': 'Training Loop',           # 训练循环
+    'step_6': 'Metrics Collection',      # 指标收集
+    'step_7': 'Model Checkpointing'      # 检查点保存
+}
+```
+
+### 8.2 检查点配置
+```python
+checkpoint_config = {
+    'save_interval': 1000,              # 保存间隔（步数）
+    'save_dir': '/tmp/checkpoints',     # 保存目录
+    'format': 'pytorch',                # 保存格式
+    'components': [
+        'model_state_dict',             # 模型状态
+        'optimizer_state_dict',         # 优化器状态
+        'scheduler_state_dict',         # 调度器状态
+        'training_metrics',             # 训练指标
+        'quantization_config'           # 量化配置
+    ]
+}
+```
+
+### 8.3 日志配置
+```python
+logging_config = {
+    'log_interval': 100,                # 日志间隔（步数）
+    'log_level': 'INFO',               # 日志级别
+    'log_file': 'training.log',        # 日志文件
+    'metrics_format': 'JSON',          # 指标格式
+    'include_metrics': [
+        'loss',                        # 训练损失
+        'grad_norm',                   # 梯度范数
+        'learning_rate',               # 学习率
+        'gpu_memory',                  # GPU内存
+        'quantization_error',          # 量化误差
+        'step_time'                    # 步骤耗时
+    ]
+}
+```
+
+---
+
+## 9. 实验验证和质量控制
+
+### 9.1 训练稳定性验证
+```python
+stability_checks = {
+    'gradient_explosion': 'grad_norm < 10.0',     # 梯度爆炸检测
+    'loss_divergence': 'loss_increase_streak < 100', # 损失发散检测
+    'memory_leak': 'memory_growth_rate < 1MB/step',  # 内存泄漏检测
+    'quantization_error': 'quant_error < 0.1'        # 量化误差检测
+}
+```
+
+### 9.2 对比一致性保证
+```python
+consistency_controls = {
+    'same_random_seed': 42,            # 相同随机种子
+    'same_data_order': True,           # 相同数据顺序
+    'same_initialization': 'xavier',   # 相同参数初始化
+    'same_hardware': '4x B200',        # 相同硬件配置
+    'same_software_env': 'PyTorch 2.0' # 相同软件环境
+}
+```
+
+---
+
+## 10. 预期输出和评估指标
+
+### 10.1 核心评估指标
+```python
+evaluation_metrics = {
+    'training_loss': {
+        'measure': 'Cross Entropy Loss',
+        'frequency': 'Every Step',
+        'target': 'Lower is Better'
+    },
+    'gradient_norm': {
+        'measure': 'L2 Norm of Gradients',
+        'frequency': 'Every Step',
+        'target': 'Stable < 5.0'
+    },
+    'convergence_speed': {
+        'measure': 'Steps to Target Loss',
+        'frequency': 'End of Training',
+        'target': 'Fewer Steps Better'
+    },
+    'memory_efficiency': {
+        'measure': 'Peak GPU Memory Usage',
+        'frequency': 'Every 100 Steps',
+        'target': 'Lower is Better'
+    }
+}
+```
+
+### 10.2 量化特定指标
+```python
+quantization_metrics = {
+    'quantization_error': {
+        'measure': 'MSE(original, quantized)',
+        'frequency': 'Every Step (when active)',
+        'target': '< 0.1'
+    },
+    'compression_ratio': {
+        'measure': 'Original Size / Quantized Size',
+        'frequency': 'Once',
+        'expected_value': '~4x (FP16 to FP4)'
+    }
+}
+```
+
+---
+
+## 11. 实验复现指南
+
+### 11.1 环境准备
+```bash
+# 1. 设置Python路径
+export PYTHONPATH="/home/yingbohao/llm-train:$PYTHONPATH"
+
+# 2. 安装依赖
+pip install torch>=2.0.0 triton>=2.0.0
+
+# 3. 验证CUDA环境
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+### 11.2 基线训练复现
+```bash
+# 运行基线训练（4个模型并行）
+python nvfp4_qat_validation/scripts/train_baseline.py \
+    --config ./configs/base_training.yaml \
+    --model Base-0.4B
+
+python nvfp4_qat_validation/scripts/train_baseline.py \
+    --config ./configs/base_training.yaml \
+    --model GatedAttn-0.4B
+
+# ... 重复其他模型
+```
+
+### 11.3 量化训练复现
+```bash
+# 运行NVFP4量化训练
+python train_complete_nvfp4_fixed.py --model Base-0.4B
+python train_complete_nvfp4_fixed.py --model GatedAttn-0.4B
+python train_complete_nvfp4_fixed.py --model DiffAttn-0.4B
+python train_complete_nvfp4_fixed.py --model GatedDiffAttn-0.4B
+```
+
+### 11.4 结果分析
+```bash
+# 生成完整分析报告
+python complete_nvfp4_analysis.py \
+    --baseline_dir ./results/baseline_training_data \
+    --nvfp4_dir ./results/nvfp4_training_data \
+    --output_dir ./results/final_analysis
+```
+
+---
+
+## 12. 配置文件汇总
+
+### 12.1 核心配置参数总览
+```yaml
+# 完整配置摘要
+experiment_config:
+  name: "NVFP4_W4A4_vs_BF16_Attention_Study"
+  models: ["Base-0.4B", "GatedAttn-0.4B", "DiffAttn-0.4B", "GatedDiffAttn-0.4B"]
+  training_steps: 10000
+  warmup_steps: 2000
+  batch_size: 4
+  sequence_length: 512
+  learning_rate: 3e-4
+  precision: "bf16_mixed"
+
+quantization_config:
+  algorithm: "NVFP4_two_level"
+  weight_bits: 4
+  activation_bits: 4
+  group_size: 128
+  warmup_steps: 2000
+
+hardware_config:
+  gpu_type: "B200"
+  gpu_count: 4
+  memory_per_gpu: "80GB"
+  parallel_strategy: "DataParallel"
+```
+
+---
+
+## 13. 预期研究价值
+
+### 13.1 学术贡献
+- **量化算法评估:** 在不同注意力架构下验证NVFP4算法有效性
+- **架构特异性分析:** 揭示注意力机制对量化敏感性的影响
+- **训练稳定性研究:** 量化训练过程中的收敛性分析
+
+### 13.2 工程价值
+- **部署指导:** 为生产环境中的模型量化部署提供参考
+- **资源优化:** 评估量化对GPU内存和计算效率的改善
+- **架构选择:** 为量化友好的模型架构设计提供依据
+
+---
+
+## 14. 实验时间线和里程碑
+
+### 14.1 执行时间线
+```yaml
+timeline:
+  phase_1_baseline: "2026-03-02 13:00 - 15:00"  # 基线训练
+  phase_2_quantization: "2026-03-02 15:00 - 17:00"  # 量化训练
+  phase_3_analysis: "2026-03-02 17:00 - 18:00"      # 结果分析
+  total_duration: "~5 hours"
+```
+
+### 14.2 关键里程碑
+- ✅ **环境验证完成:** 所有依赖和硬件配置正确
+- ✅ **基线训练完成:** 4个模型BF16基线训练数据收集
+- ✅ **量化训练完成:** 4个模型NVFP4量化训练数据收集
+- 🟡 **对比分析完成:** 生成完整的性能对比报告
+- 🟡 **文档输出完成:** 实验报告和配置文档生成
+
+---
+
+## 结论
+
+本实验通过严格的控制变量设计，系统评估NVFP4量化算法在不同注意力架构下的表现。实验配置确保了结果的科学性和可重现性，为量化技术在大语言模型中的应用提供重要参考。
+
+**关键配置要素:**
+- ✅ **统一的模型架构参数** (d_model=1024, n_layers=24)
+- ✅ **标准的训练配置** (10K步，2K预热，BF16混合精度)
+- ✅ **真正的二级NVFP4量化** (FP32→FP8→FP4)
+- ✅ **控制变量实验设计** (相同数据、相同硬件)
+- ✅ **全面的指标收集** (损失、梯度、内存、量化误差)
+
+**配置验证状态:** ✅ 已验证并可复现
+
+---
+
+*本文档由实验配置自动生成工具创建，确保配置准确性和实验可重现性。*

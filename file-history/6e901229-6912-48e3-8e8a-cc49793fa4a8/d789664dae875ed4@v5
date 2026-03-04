@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------
+# run_single.sh — Launch a single NVFP4 experiment
+#
+# Usage:
+#   bash scripts/nvfp4_experiment/run_single.sh <MODEL_NAME> <MODE>
+#
+# Examples:
+#   bash scripts/nvfp4_experiment/run_single.sh Base-0.4B baseline
+#   bash scripts/nvfp4_experiment/run_single.sh GatedAttn-0.4B nvfp4
+# ---------------------------------------------------------------
+set -euo pipefail
+
+# -------- argument parsing --------
+MODEL_NAME="${1:?Usage: $0 <MODEL_NAME> <MODE>  (e.g. Base-0.4B baseline)}"
+MODE="${2:?Usage: $0 <MODEL_NAME> <MODE>  (MODE must be 'baseline' or 'nvfp4')}"
+
+if [[ "$MODE" != "baseline" && "$MODE" != "nvfp4" ]]; then
+    echo "ERROR: MODE must be 'baseline' or 'nvfp4', got '$MODE'" >&2
+    exit 1
+fi
+
+VALID_MODELS=("Base-0.4B" "GatedAttn-0.4B" "DiffAttn-0.4B" "GatedDiffAttn-0.4B")
+MODEL_VALID=false
+for m in "${VALID_MODELS[@]}"; do
+    if [[ "$MODEL_NAME" == "$m" ]]; then
+        MODEL_VALID=true
+        break
+    fi
+done
+if [[ "$MODEL_VALID" == "false" ]]; then
+    echo "ERROR: MODEL_NAME must be one of: ${VALID_MODELS[*]}, got '$MODEL_NAME'" >&2
+    exit 1
+fi
+
+# -------- derived names --------
+RUN_NAME="${MODEL_NAME}-${MODE}"
+
+# -------- paths --------
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOG_DIR="${PROJECT_DIR}/logs"
+SAVE_PATH="/tmp/nvfp4_runs/${RUN_NAME}"
+
+mkdir -p "$LOG_DIR"
+mkdir -p "$SAVE_PATH"
+
+LOG_FILE="${LOG_DIR}/${RUN_NAME}.log"
+
+# -------- nvfp4_mode flag --------
+if [[ "$MODE" == "baseline" ]]; then
+    NVFP4_FLAG="--nvfp4_mode 0"
+else
+    NVFP4_FLAG="--nvfp4_mode 1"
+fi
+
+# -------- clean nnscaler cache for fresh plan --------
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting experiment: ${RUN_NAME}"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Log file: ${LOG_FILE}"
+
+cd "${PROJECT_DIR}/llm"
+rm -rf .nnscaler/
+
+# -------- launch training --------
+# 用后台进程 + wait 方式运行，训练完后主动清理残留子进程。
+# 问题：torchrun 结束后，nnscaler fork 的 worker 进程有时不退出，导致 pipe 不关闭，
+# tee 永远阻塞，run_all_sequential.sh 卡住。
+# 解决：torchrun 写入日志文件，用 tail -f 实时输出到 stdout，训练完后杀掉 tail 和残留进程。
+
+torchrun \
+    --nproc_per_node=4 \
+    --nnodes=1 \
+    --master_port=$((29500 + RANDOM % 100)) \
+    nnscaler_train.py \
+    --model "$MODEL_NAME" \
+    --data debug \
+    --hyperparams nvfp4_experiment \
+    --no_save \
+    --batch_size 2 \
+    --update_freq 2 \
+    --max_seq_len 4096 \
+    --seed 42 \
+    --plan_ngpus 1 \
+    --runtime_ngpus 4 \
+    --zero_group_size 4 \
+    --precision fp32 \
+    --xentropy_recompute \
+    --use_async_reducer \
+    --disable_shared_param_constraint \
+    --gpu_mem_constraint 135 \
+    --learning_rate 6e-4 \
+    --min_lr 3e-5 \
+    --warmup_iters 2000 \
+    --max_updates 10000 \
+    --wandb_project nvfp4_experiment \
+    --wandb_entity "3259482542-south-china-university-of-technology" \
+    --name "$RUN_NAME" \
+    --save_path "$SAVE_PATH" \
+    ${NVFP4_FLAG} \
+    >> "$LOG_FILE" 2>&1 &
+
+TORCHRUN_PID=$!
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] torchrun PID: ${TORCHRUN_PID}"
+
+# 实时输出日志到 stdout（方便看 nohup 的 run_all.log）
+tail -f "$LOG_FILE" &
+TAIL_PID=$!
+
+# 等待 torchrun 主进程结束
+wait $TORCHRUN_PID
+TRAIN_EXIT_CODE=$?
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] torchrun exited with code: ${TRAIN_EXIT_CODE}"
+
+# 清理：杀掉 tail
+kill $TAIL_PID 2>/dev/null || true
+
+# 清理：杀掉可能残留的 nnscaler worker 子进程（torchrun 的后代进程）
+# 等几秒让子进程自然退出
+sleep 3
+REMAINING=$(pgrep -f "nnscaler_train.py.*--name ${RUN_NAME}" 2>/dev/null || true)
+if [[ -n "$REMAINING" ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Killing remaining worker processes: ${REMAINING}"
+    echo "$REMAINING" | xargs -r kill 2>/dev/null || true
+    sleep 2
+    # 强制杀
+    REMAINING=$(pgrep -f "nnscaler_train.py.*--name ${RUN_NAME}" 2>/dev/null || true)
+    if [[ -n "$REMAINING" ]]; then
+        echo "$REMAINING" | xargs -r kill -9 2>/dev/null || true
+    fi
+fi
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cleanup done for ${RUN_NAME}"
+exit $TRAIN_EXIT_CODE

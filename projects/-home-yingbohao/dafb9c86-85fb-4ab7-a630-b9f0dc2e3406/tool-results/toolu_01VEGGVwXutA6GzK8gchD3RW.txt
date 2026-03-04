@@ -1,0 +1,54 @@
+   100→            self.tokens_per_expert_buffer = self.tokens_per_expert_buffer + all_tokens_per_expert
+   101→        normalized_tokens_per_expert = self.tokens_per_expert_buffer / (self.tokens_per_expert_buffer.sum(dim=-1, keepdim=True) + 1e-6)
+   102→        l_aux = torch.bmm(all_expert_prob.float(), normalized_tokens_per_expert.transpose(-1, -2))
+   103→        # [L, N, E] * [L, E, K] -> [L, N, K]
+   104→        if self.mode == 'domain':
+   105→            l_aux = torch.gather(l_aux, dim=2, index=tag_index[None, :, None].repeat(l_aux.shape[0], 1, 1))
+   106→        l_aux = self.scale * l_aux.mean(dim=0).flatten()
+   107→        l_aux = torch.sum(l_aux * loss_mask)
+   108→        return l_aux
+   109→
+   110→
+   111→class BackBone(torch.nn.Module):
+   112→    def __init__(self, model_args, xentropy_chunk_size, xentropy_recompute, precision):
+   113→        super().__init__()
+   114→        # model weights are fp32 if loading from hf ckpts
+   115→        self.model_args = model_args
+   116→        self.model = Model(ModelArgs(**model_args))
+   117→        self.xentropy_chunk_size = xentropy_chunk_size
+   118→        self.xentropy_recompute = xentropy_recompute
+   119→        self.precision = precision
+   120→        self.ignore_index = model_args['vocab_size'] - 1
+   121→        self.fp32_param = ['gate.weight']
+   122→        self.fp32_buffer = ['cos_sin_cache']
+   123→        if self.precision == 'bf16':
+   124→            _logger.info('Casting model parameters to bf16 after optimizer initialization')
+   125→            param_dtype, buffer_dtype = torch.bfloat16, torch.bfloat16
+   126→            # the name `gate.weight`` is replaced to `gate_weight` in nnscaler
+   127→            for name, param in self.model.named_parameters():
+   128→                is_fp32_weight = any(fp32_name in name for fp32_name in self.fp32_param)
+   129→                if not is_fp32_weight and param.is_floating_point() and param.dtype != torch.bfloat16:
+   130→                    _logger.info(f'casting {name} to {param_dtype}')
+   131→                    param.data = param.data.to(param_dtype)
+   132→                else:
+   133→                    _logger.info(f'skipping casting for {name}')
+   134→            for name, buf in self.model.named_buffers():
+   135→                is_fp32_buffer = False
+   136→                for fp32_name in self.fp32_buffer:
+   137→                    if fp32_name in name:
+   138→                        is_fp32_buffer = True
+   139→                        break
+   140→                if not is_fp32_buffer and buf.is_floating_point():
+   141→                    _logger.info(f'casting {name} to {buffer_dtype}')
+   142→                    buf.data = buf.data.to(buffer_dtype)
+   143→                else:
+   144→                    _logger.info(f'skipping casting for {name}')
+   145→
+   146→        _logger.info(f'Model: {self.model}')
+   147→
+   148→    def forward(self, samples):
+   149→        tokens, context, targets = samples['tokens'], samples['context'], samples['targets']
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

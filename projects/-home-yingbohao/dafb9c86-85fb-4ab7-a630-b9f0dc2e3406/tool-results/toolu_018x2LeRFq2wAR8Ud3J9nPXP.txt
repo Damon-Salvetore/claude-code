@@ -1,0 +1,457 @@
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-112-    intermediate_parallel = activation_func_with_probs(fc1_output, global_probs)
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-113-    expert_outs = gmm(intermediate_parallel, w2, num_tokens_per_local_expert)
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-114-    return expert_outs
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-115-
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-116-
+arch/all2all_moe.py:117:def fused_ffn(input_tokens, w13, w2, num_tokens_per_expert, probs, fp8_mode=0):
+arch/all2all_moe.py-118-    # In this context (all2all_moe):
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-119-    # - input_tokens are already sorted by expert (expert 0's tokens, then expert 1's, etc.)
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-120-    # - num_tokens_per_expert[i] tells how many tokens belong to expert i
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-121-    # - probs are the routing probabilities, already sorted to match input_tokens order
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-122-    expert_cnt = num_tokens_per_expert
+--
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-127-        w2,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-128-        expert_cnt,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-129-        expert_idx=None,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-130-        reversed_idx=None,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-131-        routing_weights=routing_weights,
+arch/all2all_moe.py:132:        fp8_mode=fp8_mode,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-133-        nnscaler=True,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-134-    )
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-135-
+arch/all2all_moe.py:136:def act_quant_fp8(hidden_states):
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-137-    return ActQuantFP8.apply(hidden_states)
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-138-
+arch/all2all_moe.py:139:def deepep_all2all_moe_gmm(hidden_states, routing_probs, routing_map, w13, w2, num_experts, local_expert_start, local_expert_end, topk, fp8_mode=0, process_group=None):
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-140-    # dispatch process
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-141-    hidden_shape = hidden_states.shape
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-142-    hidden_states = hidden_states.view(-1, hidden_shape[-1])
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-143-
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-144-    num_local_experts = local_expert_end - local_expert_start
+--
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-186-        global_input_tokens,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-187-        w13,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-188-        w2,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-189-        num_tokens_per_expert,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-190-        permuted_probs,
+arch/all2all_moe.py:191:        fp8_mode=fp8_mode,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-192-    )
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-193-
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-194-    # combine preprocess
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-195-    expert_outs = unpermute(
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-196-        expert_outs,
+--
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-212-    hidden_states = hidden_states.view(hidden_shape)
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-213-
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-214-    return hidden_states
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-215-
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-216-
+arch/all2all_moe.py:217:def nnscaler_all2all_moe_gmm(hidden_states, routing_probs, routing_map, w13, w2, num_experts, local_expert_start, local_expert_end, topk, fp8_mode=0, process_group=None):
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-218-    # Use DeepEP fused path only when available and on Hopper/Blackwell GPUs
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-219-    if (
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-220-        USE_DEEPEP_A2A
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-221-        and process_group is not None
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-222-        and torch.cuda.is_available()
+--
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-231-            w2,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-232-            num_experts,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-233-            local_expert_start,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-234-            local_expert_end,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-235-            topk,
+arch/all2all_moe.py:236:            fp8_mode,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-237-            process_group,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-238-        )
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-239-
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-240-    num_local_experts = w13.size(0)
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-241-    ep_size = 1 if process_group is None else len(process_group)
+--
+arch/all2all_moe.py-245-    if ep_size == 1:
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-246-        num_experts = num_local_experts
+arch/all2all_moe.py-247-        routing_map = routing_map[:, local_expert_start:local_expert_end].contiguous()
+arch/all2all_moe.py-248-        routing_probs = routing_probs[:, local_expert_start:local_expert_end].contiguous()
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-249-
+arch/all2all_moe.py:250:    if fp8_mode == 1:
+arch/all2all_moe.py:251:        hidden_states = act_quant_fp8(hidden_states)
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-252-
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-253-    input_chunk_idxs = torch.arange(num_experts, device=hidden_states.device)
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-254-    sort_input_by_local_experts = input_chunk_idxs.reshape(-1, num_local_experts).T.ravel()
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-255-    restore_output_by_local_experts = input_chunk_idxs.reshape(num_local_experts, -1).T.ravel()
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-256-
+--
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-302-        global_input_tokens,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-303-        w13,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-304-        w2,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-305-        num_tokens_per_local_expert,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-306-        global_probs,
+arch/all2all_moe.py:307:        fp8_mode=fp8_mode,
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-308-    )
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-309-
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-310-    # preprocess
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-311-    expert_outs, _ = sort_chunks_by_idxs(
+/home/yingbohao/llm-train/llm/arch/all2all_moe.py-312-        expert_outs,
+--
+arch/model.py-16-    def __init__(self, index: int, args: ModelArgs):
+/home/yingbohao/llm-train/llm/arch/model.py-17-        super(Block, self).__init__()
+/home/yingbohao/llm-train/llm/arch/model.py-18-        self.moe = args.moe and index >= args.dense_layers
+/home/yingbohao/llm-train/llm/arch/model.py-19-        self.self_attn = Attention(index, args)
+arch/model.py-20-        if self.moe:
+arch/model.py:21:            self.mlp = MoE(args.d_model, args.moe_ffn_dim, args.moe_expert_num, args.moe_top_k, args.d_shared_expert, args.fp8_mode)
+arch/model.py-22-        else:
+/home/yingbohao/llm-train/llm/arch/model.py-23-            self.mlp = FeedForwardNetwork(args.d_model, args.d_ffn)
+/home/yingbohao/llm-train/llm/arch/model.py-24-        self.input_layernorm = RMSNorm(args.d_model, eps=args.norm_eps)
+/home/yingbohao/llm-train/llm/arch/model.py-25-        self.post_attention_layernorm = RMSNorm(args.d_model, eps=args.norm_eps)
+/home/yingbohao/llm-train/llm/arch/model.py-26-
+--
+/home/yingbohao/llm-train/llm/arch/moe.py-19-        embed_dim,
+/home/yingbohao/llm-train/llm/arch/moe.py-20-        moe_ffn_dim,
+/home/yingbohao/llm-train/llm/arch/moe.py-21-        num_experts,
+/home/yingbohao/llm-train/llm/arch/moe.py-22-        top_k,
+/home/yingbohao/llm-train/llm/arch/moe.py-23-        d_shared_expert,
+arch/moe.py:24:        fp8_mode=0,
+arch/moe.py-25-    ):
+/home/yingbohao/llm-train/llm/arch/moe.py-26-        super().__init__()
+/home/yingbohao/llm-train/llm/arch/moe.py-27-        self.embed_dim = embed_dim
+/home/yingbohao/llm-train/llm/arch/moe.py-28-        self.moe_ffn_dim = moe_ffn_dim
+/home/yingbohao/llm-train/llm/arch/moe.py-29-        self.num_experts = num_experts
+--
+arch/moe.py-36-        if d_shared_expert > 0:
+/home/yingbohao/llm-train/llm/arch/moe.py-37-            self.shared = FeedForwardNetwork(embed_dim, d_shared_expert)
+/home/yingbohao/llm-train/llm/arch/moe.py-38-            self.shared_gate = MixPrecisionLinear(embed_dim, 1, bias=False)
+arch/moe.py-39-        else:
+/home/yingbohao/llm-train/llm/arch/moe.py-40-            self.shared, self.shared_gate = None, None
+arch/moe.py:41:        self.fp8_mode = fp8_mode
+/home/yingbohao/llm-train/llm/arch/moe.py-42-        self.init_weights()
+/home/yingbohao/llm-train/llm/arch/moe.py-43-
+arch/moe.py-44-    def init_weights(self):
+/home/yingbohao/llm-train/llm/arch/moe.py-45-        nn.init.kaiming_uniform_(self.gate.weight, a=math.sqrt(5), mode='fan_in')
+arch/moe.py-46-        for i in range(self.num_experts):
+--
+/home/yingbohao/llm-train/llm/arch/moe.py-58-            self.w2,
+/home/yingbohao/llm-train/llm/arch/moe.py-59-            self.num_experts,
+/home/yingbohao/llm-train/llm/arch/moe.py-60-            0,
+/home/yingbohao/llm-train/llm/arch/moe.py-61-            self.num_experts,
+/home/yingbohao/llm-train/llm/arch/moe.py-62-            self.top_k,
+arch/moe.py:63:            fp8_mode=self.fp8_mode,
+/home/yingbohao/llm-train/llm/arch/moe.py-64-        )
+arch/moe.py-65-        if self.shared:
+/home/yingbohao/llm-train/llm/arch/moe.py-66-            shared_gate_score = torch.sigmoid(self.shared_gate(x))
+/home/yingbohao/llm-train/llm/arch/moe.py-67-            final_hidden_states = final_hidden_states + shared_gate_score * self.shared(x)
+/home/yingbohao/llm-train/llm/arch/moe.py-68-
+--
+/home/yingbohao/llm-train/llm/arch/config.py-51-    # if set, use cute flash attention implementation
+arch/config.py-52-    use_cute: bool = False
+arch/config.py-53-    z_loss_scale: float = 0.0
+arch/config.py-54-    z_loss_start_step: int = 10000
+arch/config.py-55-    z_loss_warmup_step: int = 1000
+arch/config.py:56:    fp8_mode: int = 0  # 0: disable, 1: fp8 fake quant, 2: fp8 quant
+/home/yingbohao/llm-train/llm/arch/config.py-57-
+arch/config.py-58-    def __post_init__(self):
+arch/config.py-59-        if self.head_dim is None:
+/home/yingbohao/llm-train/llm/arch/config.py-60-            self.head_dim = self.d_model // self.head
+arch/config.py-61-        if self.cross_head is None:
+--
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-1-import torch
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-2-import triton
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-3-import triton.language as tl
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-4-from .utils import is_hip
+kernel/scatter_gather.py:5:from .quant import _act_fake_quant, _act_fake_quant_fp8, weight_quant_fp8_, act_quant_fp8_, weight_quant
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-6-
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-7-@triton.autotune(
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-8-    configs=[
+kernel/scatter_gather.py-9-        triton.Config({'BLOCK_SIZE_M': 1}, num_warps=4, num_stages=1),
+kernel/scatter_gather.py-10-        triton.Config({'BLOCK_SIZE_M': 4}, num_warps=4, num_stages=1),
+--
+kernel/scatter_gather.py-64-    cnt: torch.Tensor,              # [num_experts+1, ]
+kernel/scatter_gather.py-65-    expert_idx: torch.Tensor,       # [num_experts, num_tokens]
+kernel/scatter_gather.py-66-    routing_weights: torch.Tensor,  # [num_tokens, top_k]
+kernel/scatter_gather.py-67-    max_tokens_per_expert: int,
+kernel/scatter_gather.py-68-    quant_bits: int = 0,
+kernel/scatter_gather.py:69:    fp8_mode: int = 0,
+kernel/scatter_gather.py-70-    weighted: bool = False,
+kernel/scatter_gather.py-71-):
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-72-    E = cnt.shape[0] - 1
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-73-    num_local_tokens = cnt[-1]
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-74-    num_tokens, hidden_dim = inputs.shape
+--
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-77-        size=(num_local_tokens, hidden_dim),
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-78-        device=inputs.device,
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-79-        dtype=inputs.dtype,
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-80-    )
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-81-    block_size_N = triton.next_power_of_2(hidden_dim)
+kernel/scatter_gather.py:82:    if fp8_mode == 1:
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-83-        block_size = 128
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-84-        assert inputs.size(-1) % block_size == 0
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-85-        num_block = block_size_N // block_size    
+kernel/scatter_gather.py-86-    else:
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-87-        block_size = num_block = 0
+--
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-95-        expert_idx.stride(0),
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-96-        num_tokens, hidden_dim, E, top_k,
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-97-        WEIGHTED=weighted, QUANT_BITS=quant_bits, 
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-98-        BLOCK_SIZE_N=block_size_N, BLOCK_SIZE_Q=block_size, NUM_BLOCK=num_block,
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-99-        IS_HIP=is_hip(),
+kernel/scatter_gather.py:100:        FP8_MODE=fp8_mode,
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-101-    )
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-102-    return outputs
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-103-
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-104-@triton.jit
+/home/yingbohao/llm-train/llm/kernel/scatter_gather.py-105-def _retrieve2accu(
+--
+/home/yingbohao/llm-train/llm/kernel/quant.py-87-    q = w_vals / s
+/home/yingbohao/llm-train/llm/kernel/quant.py-88-    q = tl.clamp(q, -448., 448.)
+/home/yingbohao/llm-train/llm/kernel/quant.py-89-    w_vals = q * s
+kernel/quant.py-90-    tl.store(q_ptrs, w_vals.to(q_ptr.dtype.element_ty), mask=mask[:, None])
+/home/yingbohao/llm-train/llm/kernel/quant.py-91-
+kernel/quant.py:92:def weight_quant_fp8_(x: torch.Tensor, dtype: torch.dtype):
+/home/yingbohao/llm-train/llm/kernel/quant.py-93-    """
+/home/yingbohao/llm-train/llm/kernel/quant.py-94-    fp8 fake quant for w13 and w2
+/home/yingbohao/llm-train/llm/kernel/quant.py-95-    """
+/home/yingbohao/llm-train/llm/kernel/quant.py-96-    y = torch.empty_like(x, dtype=dtype)
+/home/yingbohao/llm-train/llm/kernel/quant.py-97-    E, M, N = x.size(0), x.size(1), x.size(2)
+--
+/home/yingbohao/llm-train/llm/kernel/quant.py-140-    q = x_vals / s
+/home/yingbohao/llm-train/llm/kernel/quant.py-141-    q = tl.clamp(q, -448., 448.)
+/home/yingbohao/llm-train/llm/kernel/quant.py-142-    x_vals = q * s
+kernel/quant.py-143-    tl.store(q_ptrs, x_vals.to(q_ptr.dtype.element_ty), mask=mask[:, None])
+/home/yingbohao/llm-train/llm/kernel/quant.py-144-
+kernel/quant.py:145:def act_quant_fp8_(x: torch.Tensor):
+/home/yingbohao/llm-train/llm/kernel/quant.py-146-    y = torch.empty_like(x)
+/home/yingbohao/llm-train/llm/kernel/quant.py-147-    M, N = x.size(0), x.size(1)
+/home/yingbohao/llm-train/llm/kernel/quant.py-148-    assert N % 128 == 0
+kernel/quant.py-149-    grid = lambda meta: (triton.cdiv(M, meta['BLOCK_SIZE_M']) * triton.cdiv(N, meta['BLOCK_SIZE_N']), )
+/home/yingbohao/llm-train/llm/kernel/quant.py-150-    x_fake_fp8[grid](x,y,
+--
+/home/yingbohao/llm-train/llm/kernel/quant.py-173-    Activation quantization function for FP8 fake quantization.
+/home/yingbohao/llm-train/llm/kernel/quant.py-174-    This is used to simulate FP8 quantization during training.
+/home/yingbohao/llm-train/llm/kernel/quant.py-175-    """
+/home/yingbohao/llm-train/llm/kernel/quant.py-176-    @staticmethod
+kernel/quant.py-177-    def forward(ctx: torch.autograd.function.FunctionCtx, x: torch.Tensor):
+kernel/quant.py:178:        return act_quant_fp8_(x)
+/home/yingbohao/llm-train/llm/kernel/quant.py-179-    
+/home/yingbohao/llm-train/llm/kernel/quant.py-180-    @staticmethod
+kernel/quant.py-181-    def backward(ctx: torch.autograd.function.FunctionCtx, grad_output: torch.Tensor):
+/home/yingbohao/llm-train/llm/kernel/quant.py-182-        return grad_output
+/home/yingbohao/llm-train/llm/kernel/quant.py-183-
+/home/yingbohao/llm-train/llm/kernel/quant.py-184-
+kernel/quant.py:185:def act_quant_fp8(hidden_states: torch.Tensor) -> torch.Tensor:
+/home/yingbohao/llm-train/llm/kernel/quant.py-186-    """
+/home/yingbohao/llm-train/llm/kernel/quant.py-187-    Apply FP8 fake quantization to activation tensors.
+/home/yingbohao/llm-train/llm/kernel/quant.py-188-    
+kernel/quant.py-189-    Args:
+kernel/quant.py-190-        hidden_states: Input tensor of shape [M, N] where N must be divisible by 128.
+--
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-4-import torch.distributed as dist
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-5-
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-6-from .utils import TIMING_LOGGER, is_hip, B200_merge_configs
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-7-# from .gemm import groupedM, groupedK, Mgemm, Kgemm
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-8-from .gemm import _Mgemm, _Kgemm, HAVE_RAGGED_TMA
+kernel/moe_ffn.py:9:from .quant import _act_fake_quant, _act_fake_quant_fp8, weight_quant_fp8_, act_quant_fp8_, weight_quant
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-10-from .scatter_gather import scatter_by_expert, merge_topk, compute_grw
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-11-
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-12-@triton.jit
+kernel/moe_ffn.py-13-def _silu(x):
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-14-    # return x * (1 / (1 + tl.exp(-x))) => bad precision
+--
+kernel/moe_ffn.py-72-    routing_weight: torch.Tensor,   # [num_tokens, ]
+kernel/moe_ffn.py-73-    norm_eps: float,
+kernel/moe_ffn.py-74-    quant_bits: int,
+kernel/moe_ffn.py-75-    max_tokens_per_expert: int,
+kernel/moe_ffn.py-76-    num_local_experts: int,
+kernel/moe_ffn.py:77:    fp8_mode: int = 0,
+kernel/moe_ffn.py-78-    nnscaler: bool = False,
+kernel/moe_ffn.py-79-):
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-80-    num_tokens, hidden_dim = inputs.shape
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-81-    hidden_dim //= 2
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-82-    outputs = torch.empty((num_tokens, hidden_dim), device=inputs.device, dtype=inputs.dtype)
+--
+kernel/moe_ffn.py-87-        assert quant_bits in [2, 4, 8], f"Unsupported bit width: {quant_bits}. Supported values are 2, 4, and 8."
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-88-        norm_quant = True
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-89-        stride_we = norm_weight.stride(0)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-90-        stride_wn = norm_weight.stride(1)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-91-    block_size_N = triton.next_power_of_2(hidden_dim)
+kernel/moe_ffn.py:92:    if fp8_mode == 1:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-93-        block_size = 128
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-94-        assert inputs.size(-1) % block_size == 0
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-95-        num_block = block_size_N // block_size    
+kernel/moe_ffn.py-96-    else:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-97-        block_size = num_block = 0
+--
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-110-        outputs.stride(0), outputs.stride(1),
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-111-        stride_we,         stride_wn,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-112-        hidden_dim,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-113-        NORM_QUANT=norm_quant, QUANT_BITS=quant_bits, IS_HIP=is_hip(),
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-114-        BLOCK_SIZE_N=block_size_N, BLOCK_SIZE_Q=block_size, NUM_BLOCK=num_block,
+kernel/moe_ffn.py:115:        FP8_MODE=fp8_mode, USE_RW=use_rw, num_warps=4,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-116-    )
+kernel/moe_ffn.py-117-    # # B200 best config selected: BLOCK_SIZE_M: 1, num_warps: 4, num_ctas: 1, num_stages: 1, maxnreg: None;
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-118-    return outputs
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-119-
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-120-
+--
+kernel/moe_ffn.py-240-    routing_weight: torch.Tensor,# [num_tokens, ]
+kernel/moe_ffn.py-241-    norm_eps: float,
+kernel/moe_ffn.py-242-    quant_bits: int,
+kernel/moe_ffn.py-243-    max_tokens_per_expert: int,
+kernel/moe_ffn.py-244-    num_local_experts: int,
+kernel/moe_ffn.py:245:    fp8_mode: int = 0,
+kernel/moe_ffn.py-246-    nnscaler: bool = False,
+kernel/moe_ffn.py-247-):
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-248-    assert routing_weight.dim() == 1
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-249-    assert routing_weight.dtype == torch.float32
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-250-    num_tokens, ffn_dim = gx2.shape
+--
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-262-        stride_zm = gyz.stride(0)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-263-        stride_zn = gyz.stride(1)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-264-    gy13 = torch.empty((num_tokens, 2 * ffn_dim), device=y13.device, dtype=y13.dtype)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-265-    x2 = torch.empty((num_tokens, ffn_dim), device=y13.device, dtype=y13.dtype)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-266-    block_size_N = triton.next_power_of_2(ffn_dim)
+kernel/moe_ffn.py:267:    if fp8_mode == 1:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-268-        block_size = 128
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-269-        assert ffn_dim % block_size == 0
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-270-        num_block = block_size_N // block_size
+kernel/moe_ffn.py-271-    else:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-272-        block_size = num_block = 0
+--
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-292-        stride_zm, stride_zn,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-293-        stride_rwm,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-294-        num_tokens, ffn_dim, num_local_experts,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-295-        NORM_QUANT=norm_quant, QUANT_BITS=quant_bits, IS_HIP=is_hip(),
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-296-        BLOCK_SIZE_N=block_size_N, BLOCK_SIZE_Q=block_size, NUM_BLOCK=num_block,
+kernel/moe_ffn.py:297:        FP8_MODE=fp8_mode,USE_RW=use_rw, num_warps=4,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-298-    )
+kernel/moe_ffn.py-299-    if norm_quant:
+kernel/moe_ffn.py-300-        _fused_drmsw_kernel[lambda META: (
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-301-            triton.cdiv(ffn_dim, META['BLOCK_SIZE_N']),
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-302-            num_local_experts,
+--
+kernel/moe_ffn.py-441-        idx: torch.Tensor,            # [num_experts, batch_size * sequence_length]
+kernel/moe_ffn.py-442-        ri: torch.Tensor,             # [batch_size * sequence_length, top_k]
+kernel/moe_ffn.py-443-        rw: torch.Tensor,             # [batch_size * sequence_length, top_k]
+kernel/moe_ffn.py-444-        rmsw: torch.Tensor = None,    # [num_experts, ffn_dim]
+kernel/moe_ffn.py-445-        eps: float = None,
+kernel/moe_ffn.py:446:        fp8_mode: int = 0,            # 0: not use fp8; 1: fp8 fake quant; 2: fp8 quant
+kernel/moe_ffn.py-447-        nnscaler: bool = False,
+kernel/moe_ffn.py-448-        timing_enabled: bool = False, # False: deployment mode (no memory leak); True: timing mode
+kernel/moe_ffn.py-449-        tp_group: dist.ProcessGroup = None,
+kernel/moe_ffn.py-450-        ep_group: dist.ProcessGroup = None,
+kernel/moe_ffn.py-451-    ):
+--
+kernel/moe_ffn.py-455-        if nnscaler:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-456-            assert idx is None
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-457-            assert ri is None
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-458-            assert tp_group is None
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-459-            assert ep_group is None
+kernel/moe_ffn.py:460:        assert fp8_mode != 2, "not yet support real quant"
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-461-        assert rmsw is None, "temporarily disable bitlinear"
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-462-        assert rw.dtype == torch.float32
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-463-        # get cross-rank meta info
+kernel/moe_ffn.py-464-        if dist.is_initialized() and ep_group is not None:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-465-            ep_rank, ep_size = dist.get_rank(ep_group), dist.get_world_size(ep_group)
+--
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-492-            TIMING_LOGGER('[fwd] scatter')
+kernel/moe_ffn.py-493-            # like Scatter: experts as ranks
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-494-            # pure index-based copy of rows from x into x13
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-495-            x13 = scatter_by_expert(
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-496-                x, slice_offs, idx, rw,
+kernel/moe_ffn.py:497:                max_tokens_per_expert, act_quant_bits, fp8_mode, weighted=False,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-498-            )
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-499-            TIMING_LOGGER('[fwd] scatter')
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-500-        
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-501-        # TIMING_LOGGER('[fwd] act quant')
+kernel/moe_ffn.py:502:        # x13 = act_quant_fp8_(x)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-503-        # TIMING_LOGGER('[fwd] act quant')
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-504-        
+kernel/moe_ffn.py-505-        # BitLinear: quant w13
+kernel/moe_ffn.py-506-        if rmsw is not None:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-507-            TIMING_LOGGER('[fwd] qw13')
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-508-            w13 = weight_quant(w13.view((num_local_experts * 2, -1))).view(w13.shape)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-509-            TIMING_LOGGER('[fwd] qw13')
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-510-        
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-511-        # weight is stored in fp32 in the semantics of nnscaler, need to cast to bf16 before matmul
+kernel/moe_ffn.py:512:        if fp8_mode == 1:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-513-            TIMING_LOGGER('[fwd] qw13 fake fp8')
+kernel/moe_ffn.py:514:            w13 = weight_quant_fp8_(w13, dtype=x.dtype)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-515-            TIMING_LOGGER('[fwd] qw13 fake fp8')
+kernel/moe_ffn.py-516-        else:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-517-            w13 = w13.to(x.dtype)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-518-
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-519-        # Y13 <= X13 @ W13.T
+--
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-541-        x2 = fused_silu(
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-542-            y13, slice_offs, rmsw, rw, eps,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-543-            quant_bits=act_quant_bits,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-544-            max_tokens_per_expert=max_tokens_per_expert,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-545-            num_local_experts=num_local_experts,
+kernel/moe_ffn.py:546:            fp8_mode=fp8_mode,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-547-            nnscaler=nnscaler,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-548-        )
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-549-        TIMING_LOGGER('[fwd] silu')
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-550-        
+kernel/moe_ffn.py-551-        # BitLinear: quant w2
+kernel/moe_ffn.py-552-        if rmsw is not None:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-553-            TIMING_LOGGER('[fwd] qw2')
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-554-            w2 = weight_quant(w2.view((num_local_experts, -1))).view(w2.shape)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-555-            TIMING_LOGGER('[fwd] qw2')
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-556-        
+kernel/moe_ffn.py:557:        if fp8_mode == 1:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-558-            TIMING_LOGGER('[fwd] qw2 fake fp8')
+kernel/moe_ffn.py:559:            w2 = weight_quant_fp8_(w2, dtype=x.dtype)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-560-            TIMING_LOGGER('[fwd] qw2 fake fp8')
+kernel/moe_ffn.py-561-        else:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-562-            w2 = w2.to(x.dtype)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-563-        
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-564-        # Y <= X2 @ W2.T
+--
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-626-        ctx.max_tokens_per_expert = max_tokens_per_expert
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-627-        ctx.num_local_tokens = num_local_tokens
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-628-        ctx.num_local_experts = num_local_experts
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-629-        ctx.local_expert_start = local_expert_start
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-630-        ctx.act_quant_bits = act_quant_bits
+kernel/moe_ffn.py:631:        ctx.fp8_mode = fp8_mode
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-632-        ctx.nnscaler = nnscaler
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-633-        ctx.eps = eps
+kernel/moe_ffn.py-634-        if nnscaler:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-635-            return y2
+kernel/moe_ffn.py-636-        else:
+--
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-683-            # 0 gy.shape[0] != gy2.shape[0]
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-684-            # scatter gy to gy2 (at most topk larger than gy)
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-685-            gy2 = scatter_by_expert(
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-686-                gy, slice_offs, idx, rw,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-687-                ctx.max_tokens_per_expert,
+kernel/moe_ffn.py:688:                weighted=True, fp8_mode=0,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-689-            )
+kernel/moe_ffn.py-690-            # In the semantics of nnscaler:
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-691-            # 0 gy.shape[0] == gy2.shape[0]
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-692-            # 1 essentially this opertion is not a scatter, but just elementwise multiply between gy and rw
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-693-            # 2 not need to compute gy2 when fusing rw weighting into fused_silu
+--
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-722-        x2, gy13, grmsw, grw_nn = fused_dsilu(
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-723-            gx2, y13, cnt_off, rmsw, rw, ctx.eps,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-724-            quant_bits=ctx.act_quant_bits,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-725-            max_tokens_per_expert=ctx.max_tokens_per_expert,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-726-            num_local_experts=ctx.num_local_experts,
+kernel/moe_ffn.py:727:            fp8_mode=ctx.fp8_mode, nnscaler=ctx.nnscaler,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-728-        )
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-729-        TIMING_LOGGER('[bwd] dsilu')
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-730-        
+kernel/moe_ffn.py-731-        # non-nnscaler: gW2 <= gY2.T @ X2
+kernel/moe_ffn.py-732-        # nnscaler: gW2 = gY.T @ X2_new
+--
+kernel/moe_ffn.py-805-    expert_idx: torch.Tensor,        # [num_experts, batch_size * sequence_length]
+kernel/moe_ffn.py-806-    reversed_idx: torch.Tensor,      # [batch_size * sequence_length, top_k]
+kernel/moe_ffn.py-807-    routing_weights: torch.Tensor,   # [batch_size * sequence_length, top_k]
+kernel/moe_ffn.py-808-    rmsw: torch.Tensor = None,       # [num_experts, ffn_dim]
+kernel/moe_ffn.py-809-    eps: float = None,
+kernel/moe_ffn.py:810:    fp8_mode: int = 0,               # 0: not use fp8; 1: fp8 fake quant; 2: fp8 quant
+kernel/moe_ffn.py-811-    nnscaler: bool = False,
+kernel/moe_ffn.py-812-    timing_enabled: bool = False,    # False: deployment mode (no memory leak); True: timing mode
+kernel/moe_ffn.py-813-    tp_group: dist.ProcessGroup = None,
+kernel/moe_ffn.py-814-    ep_group: dist.ProcessGroup = None,
+kernel/moe_ffn.py-815-):
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-816-    return MoEFFNFunction.apply(
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-817-        hidden_states, w13, w2,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-818-        expert_cnt, expert_idx, reversed_idx, routing_weights,
+kernel/moe_ffn.py:819:        rmsw, eps, fp8_mode, nnscaler, timing_enabled,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-820-        tp_group, ep_group,
+/home/yingbohao/llm-train/llm/kernel/moe_ffn.py-821-    )

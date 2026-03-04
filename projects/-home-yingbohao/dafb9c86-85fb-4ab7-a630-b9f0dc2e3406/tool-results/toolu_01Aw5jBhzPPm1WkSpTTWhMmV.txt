@@ -1,0 +1,73 @@
+     1→description: llm
+     2→
+     3→target:
+     4→  service: volcano
+     5→  name: oidc@msr02
+     6→  queue: bonete01
+     7→ 
+     8→environment:
+     9→  image: sunyt32/pytorch:25.12.13-py3
+    10→  setup:
+    11→  - apt-get update && apt-get install -y libarchive-dev
+    12→  - pip install blobfile tiktoken wandb numpy tensorboard libarchive-c
+    13→
+    14→code:
+    15→  local_dir: $CONFIG_DIR/../..
+    16→
+    17→storage:
+    18→  msranlp:
+    19→    storage_account_name: msranlp
+    20→    container_name: unilm
+    21→  nlcredstone:
+    22→    storage_account_name: nlcredstone
+    23→    container_name: unilm
+    24→  msranlphot:
+    25→    storage_account_name: msranlphot
+    26→    container_name: data
+    27→  conversationhubhot:
+    28→    storage_account_name: conversationhubhot
+    29→    container_name: unilm
+    30→  conversationhubcacentral:
+    31→    storage_account_name: conversationhubcacentral
+    32→    container_name: data
+    33→  output:
+    34→    storage_account_name: msranlphot
+    35→    container_name: wangliang
+    36→
+    37→search:
+    38→  job_template:
+    39→    name: t_{model}
+    40→    identity: managed
+    41→    # priority: high
+    42→    submit_args:
+    43→      env:
+    44→        AMLT_PERSISTENT_VOLUME_NAME: "pvc-vast-bonete01"
+    45→        AMLT_PERSISTENT_VOLUME_MOUNT_DIR: /mnt/pvc
+    46→        AMLT_EXCLUDED_NODE_LIST: "slc01-cl02-hgx-0105,slc01-cl02-hgx-0329,slc01-cl02-hgx-0400,slc01-cl02-hgx-0065,slc01-cl02-hgx-0404,slc01-cl02-hgx-0217,slc01-cl02-hgx-0388,slc01-cl02-hgx-0450,slc01-cl02-hgx-0424,slc01-cl02-hgx-0323,slc01-cl02-hgx-0317,slc01-cl02-hgx-0261,slc01-cl02-hgx-0239,slc01-cl02-hgx-0474,slc01-cl02-hgx-0081,slc01-cl02-hgx-0284,slc01-cl02-hgx-0280,slc01-cl02-hgx-0455,slc01-cl02-hgx-0001,slc01-cl02-hgx-0299"
+    47→    sku: 64xG8
+    48→    sla_tier: premium
+    49→    mpi: True
+    50→    process_count_per_node: 1
+    51→    command:
+    52→    - env
+    53→    - cat repo.diff || echo "No repo.diff found"
+    54→    - NGPUS=$$((WORLD_SIZE * 8))
+    55→    - export PATH=/home/aiscuser/.local/bin:$$PATH
+    56→    - export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+    57→    - bash scripts/setup_cube.sh
+    58→    - cd llm/
+    59→    - export PROJECT_NAME=agens
+    60→    - export WANDB_API_KEY=ec7b484fff5bf2214400793e400b0f8adece869d
+    61→    - export WANDB_NAME={model}
+    62→    - export MASTER_ADDR=$$(cat /etc/volcano/master.host)
+    63→    - torchrun --nproc_per_node=8 --nnodes=$${WORLD_SIZE} --node_rank=$$RANK --master_addr=$$MASTER_ADDR --master_port=$$MASTER_PORT nnscaler_train.py --model YOCO-3B --data liang-p1-251219-nfs --num_workers 2 --hyperparams warmup_constant --batch_size 2 --update_freq 2 --save_path /mnt/pvc/lidong1/exp/$${PROJECT_NAME}/{model} --save_interval 5000 --wandb_project $${PROJECT_NAME} --learning_rate 6e-4 --min_lr 6e-4 --warmup_iters 2000 --max_updates 10000000 --max_seq_len 8192 --plan_ngpus 1 --runtime_ngpus $${NGPUS} --zero_group_size 8 --xentropy_recompute --name $${PROJECT_NAME} --gpu_mem_constraint 200 --universal_loop 3 --disable_shared_param_constraint --use_async_reducer --profile_dir /mnt/pvc/lidong1/nnscaler/nvcr_2511/dense_mix --z_loss_scale 1e-5 --precision fp32
+    64→  type: grid
+    65→  max_trials: 500
+    66→  params:
+    67→    - name: model
+    68→      spec: discrete
+    69→      values: ["YOCO-3B-U3-Wm2k"]
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

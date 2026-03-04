@@ -1,0 +1,84 @@
+     1→import math
+     2→from einops import rearrange
+     3→from typing import Optional, Dict
+     4→
+     5→import torch
+     6→import torch.nn as nn
+     7→from .config import ModelArgs
+     8→import logging
+     9→from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+    10→from einops import rearrange
+    11→from .rotary_embedding import get_rope
+    12→
+    13→from .rms_norm import RMSNorm
+    14→from .linear import MixPrecisionLinear
+    15→from kernel.store_kvcache import store_kvcache
+    16→
+    17→import nnscaler
+    18→from nnscaler.customized_ops.ring_attention.ring_attn_varlen import wrap_ring_attn_varlen_func
+    19→
+    20→logger = logging.getLogger(__name__)
+    21→
+    22→@torch.compile
+    23→def glu(x: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+    24→    return x * torch.sigmoid(gate)
+    25→
+    26→@torch.compile
+    27→def diff(attn1: torch.Tensor, attn2: torch.Tensor, lambda_val: torch.Tensor) -> torch.Tensor:
+    28→    return attn1 - torch.sigmoid(lambda_val).unsqueeze(-1) * attn2
+    29→
+    30→nnscaler.register_op('l d, l d -> l d')(glu)
+    31→nnscaler.register_op('l h d^, l h d^, l h -> l h d^')(diff)
+    32→
+    33→class Attention(nn.Module):
+    34→
+    35→    def __init__(self, index: int, args: ModelArgs):
+    36→        super(Attention, self).__init__()
+    37→        self.layer_index = index
+    38→        self.is_self_layer = index < args.n_layers - args.yoco_cross_layers
+    39→        self.dp_sharded = args.dp_sharded
+    40→        self.use_cute = args.use_cute
+    41→        if args.yoco_cross_layers > 0:
+    42→            window_size = args.yoco_window_size if self.is_self_layer else -1
+    43→        else:
+    44→            window_size = -1
+    45→        logger.info(f"Attention layer {index} is_self_layer: {self.is_self_layer}, window_size: {window_size}")
+    46→        self.window_size = (window_size, 0) if window_size > 0 else (-1, -1)
+    47→        self.head_dim = args.head_dim
+    48→        self.kv_head = args.kv_head
+    49→        self.head = args.head if self.is_self_layer else args.cross_head
+    50→        self.rope = get_rope(self.head_dim, self.head_dim, args.max_seq_len, args.rope_theta) if self.is_self_layer else None
+    51→        self.diff_attention = args.diff_attention
+    52→        q_proj_dim = 2 * self.head * self.head_dim if self.diff_attention else self.head * self.head_dim
+    53→        if self.is_self_layer:
+    54→            self.q_proj = MixPrecisionLinear(args.d_model, q_proj_dim, bias=args.attention_bias)
+    55→            self.k_proj = MixPrecisionLinear(args.d_model, self.kv_head * self.head_dim, bias=args.attention_bias)
+    56→            self.v_proj = MixPrecisionLinear(args.d_model, self.kv_head * self.head_dim, bias=args.attention_bias)
+    57→        else:
+    58→            self.q_proj = MixPrecisionLinear(args.d_model, q_proj_dim, bias=args.attention_bias)
+    59→
+    60→        if args.qk_norm and self.is_self_layer:
+    61→            self.q_norm = RMSNorm(self.head_dim, eps=args.norm_eps, elementwise_affine=False)
+    62→            self.k_norm = RMSNorm(self.head_dim, eps=args.norm_eps, elementwise_affine=False)
+    63→        else:
+    64→            self.q_norm = nn.Identity()
+    65→            self.k_norm = nn.Identity()
+    66→
+    67→        self.o_proj = MixPrecisionLinear(self.head * self.head_dim, args.d_model, bias=False)
+    68→        self.gate_proj = MixPrecisionLinear(args.d_model, self.head * self.head_dim, bias=args.attention_bias) if args.gated_attention else None
+    69→        self.lambda_proj = MixPrecisionLinear(args.d_model, self.head, bias=False) if self.diff_attention else None
+    70→        self.init_weights()
+    71→
+    72→    def init_weights(self):
+    73→        nn.init.kaiming_uniform_(self.q_proj.weight, a=math.sqrt(5), mode='fan_in')
+    74→        nn.init.kaiming_uniform_(self.o_proj.weight, a=math.sqrt(5), mode='fan_out')
+    75→        if self.is_self_layer:
+    76→            nn.init.kaiming_uniform_(self.k_proj.weight, a=math.sqrt(5), mode='fan_in')
+    77→            nn.init.kaiming_uniform_(self.v_proj.weight, a=math.sqrt(5), mode='fan_in')
+    78→        if self.gate_proj is not None:
+    79→            nn.init.kaiming_uniform_(self.gate_proj.weight, a=math.sqrt(5), mode='fan_in')
+    80→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

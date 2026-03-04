@@ -1,0 +1,154 @@
+     1→#  Copyright (c) Microsoft Corporation.
+     2→#  Licensed under the MIT License.
+     3→
+     4→import argparse
+     5→import math
+     6→import os
+     7→import gc
+     8→from dataclasses import asdict
+     9→import logging
+    10→import threading
+    11→import psutil
+    12→import requests
+    13→
+    14→import torch
+    15→import torch.distributed as dist
+    16→
+    17→import nnscaler
+    18→from nnscaler.utils import set_default_logger_level
+    19→from nnscaler.cli.trainer import Trainer
+    20→from nnscaler.cli.trainer_args import (
+    21→    CheckpointConfig,
+    22→    DatasetConfig,
+    23→    HookMapConfig,
+    24→    ModelConfig,
+    25→    OptimizerConfig,
+    26→    TrainerArgs,
+    27→    DataloaderConfig,
+    28→    AggregatedOutputs,
+    29→    LogConfig,
+    30→    DatasetSamplerConfig,
+    31→    LRSchedulerConfig,
+    32→    ResumeOptions,
+    33→    ModuleParallelizeConfig,
+    34→    SerializerOptions,
+    35→)
+    36→from nnscaler.parallel import ComputeConfig, BroadcastGenFilesStrategy
+    37→from nnscaler.runtime.f16_optimizer import MixedPrecisionAdamW
+    38→from nnscaler.cli.loggers.tensorboard import TensorBoardLogger
+    39→from nnscaler.cli.loggers.wandb import WandbLogger
+    40→from nnscaler.runtime.device import DeviceGroup
+    41→from nnscaler.policies import pas_autodist
+    42→from nnscaler.ir.operator import IRFwOperation
+    43→from nnscaler.cli.serialization import register_serialization_runner
+    44→
+    45→# llm.py start
+    46→from arch.model import ModelArgs, Model
+    47→from arch.flop_utils import estimate_flops, estimate_total_params, estimate_activated_params_moe
+    48→import config
+    49→from data.lm_loader import LMLoader, DataLoaderArgs
+    50→from data.data_loader import DataLoader
+    51→from warmup_scheduler import WarmupCosineAnnealingLR
+    52→from kernel.vocab_parallel_cross_entropy import inner_chunk_linear_cross_entropy
+    53→import nnscaler_funcs
+    54→from file_dist_init import setup_distributed
+    55→from ckpt import SplitSerializationRunner, Norm2SplitSerializationRunner
+    56→# llm.py end
+    57→
+    58→_logger = logging.getLogger(__name__)
+    59→
+    60→
+    61→class MoELoss(torch.nn.Module):
+    62→    def __init__(self, model_args):
+    63→        super().__init__()
+    64→        self.model_args = model_args
+    65→        self.tokens_per_expert_buffer = None
+    66→        self.sync_group = 'EMPTY'
+    67→        self.scale = model_args['moe_expert_num']
+    68→        self.mode = model_args['balance_mode']
+    69→        assert self.mode in ['global', 'domain', 'subset'], f'Invalid balance mode: {self.mode}'
+    70→
+    71→    def clear_buffer(self):
+    72→        self.tokens_per_expert_buffer = None
+    73→
+    74→    def set_sync_group(self, sync_group):
+    75→        self.sync_group = sync_group
+    76→
+    77→    def forward(self, all_routing_map, all_expert_prob, tag_index, loss_mask, tag_length):
+    78→        if all_routing_map is None or all_expert_prob is None:
+    79→            return None
+    80→
+    81→        # [L, N, E], where L is sequence length, N is token, E is number of experts
+    82→        all_routing_map = all_routing_map.clone() * loss_mask.unsqueeze(-1)
+    83→        if self.mode in ('global', 'subset'):
+    84→            if self.mode == 'subset':
+    85→                tag_mask = tag_index != -1
+    86→                all_routing_map = all_routing_map * tag_mask.unsqueeze(-1)
+    87→                all_expert_prob = all_expert_prob * tag_mask.unsqueeze(-1)
+    88→                # tag_index = tag_index * tag_mask
+    89→            all_tokens_per_expert = all_routing_map.sum(dim=1, keepdim=True)
+    90→        elif self.mode == 'domain':
+    91→            all_tokens_per_expert = torch.zeros(all_routing_map.shape[0], tag_length, all_routing_map.shape[2], device=all_routing_map.device, dtype=torch.float32)
+    92→            all_tokens_per_expert.scatter_add_(dim=1, index=tag_index[None, :, None].repeat(all_routing_map.shape[0], 1, all_routing_map.shape[2]), src=all_routing_map.float())
+    93→
+    94→        if self.sync_group != 'EMPTY':
+    95→            torch.distributed.all_reduce(all_tokens_per_expert, group=self.sync_group, op=torch.distributed.ReduceOp.AVG)
+    96→
+    97→        if self.tokens_per_expert_buffer is None:
+    98→            self.tokens_per_expert_buffer = all_tokens_per_expert
+    99→        else:
+   100→            self.tokens_per_expert_buffer = self.tokens_per_expert_buffer + all_tokens_per_expert
+   101→        normalized_tokens_per_expert = self.tokens_per_expert_buffer / (self.tokens_per_expert_buffer.sum(dim=-1, keepdim=True) + 1e-6)
+   102→        l_aux = torch.bmm(all_expert_prob.float(), normalized_tokens_per_expert.transpose(-1, -2))
+   103→        # [L, N, E] * [L, E, K] -> [L, N, K]
+   104→        if self.mode == 'domain':
+   105→            l_aux = torch.gather(l_aux, dim=2, index=tag_index[None, :, None].repeat(l_aux.shape[0], 1, 1))
+   106→        l_aux = self.scale * l_aux.mean(dim=0).flatten()
+   107→        l_aux = torch.sum(l_aux * loss_mask)
+   108→        return l_aux
+   109→
+   110→
+   111→class BackBone(torch.nn.Module):
+   112→    def __init__(self, model_args, xentropy_chunk_size, xentropy_recompute, precision):
+   113→        super().__init__()
+   114→        # model weights are fp32 if loading from hf ckpts
+   115→        self.model_args = model_args
+   116→        self.model = Model(ModelArgs(**model_args))
+   117→        self.xentropy_chunk_size = xentropy_chunk_size
+   118→        self.xentropy_recompute = xentropy_recompute
+   119→        self.precision = precision
+   120→        self.ignore_index = model_args['vocab_size'] - 1
+   121→        self.fp32_param = ['gate.weight']
+   122→        self.fp32_buffer = ['cos_sin_cache']
+   123→        if self.precision == 'bf16':
+   124→            _logger.info('Casting model parameters to bf16 after optimizer initialization')
+   125→            param_dtype, buffer_dtype = torch.bfloat16, torch.bfloat16
+   126→            # the name `gate.weight`` is replaced to `gate_weight` in nnscaler
+   127→            for name, param in self.model.named_parameters():
+   128→                is_fp32_weight = any(fp32_name in name for fp32_name in self.fp32_param)
+   129→                if not is_fp32_weight and param.is_floating_point() and param.dtype != torch.bfloat16:
+   130→                    _logger.info(f'casting {name} to {param_dtype}')
+   131→                    param.data = param.data.to(param_dtype)
+   132→                else:
+   133→                    _logger.info(f'skipping casting for {name}')
+   134→            for name, buf in self.model.named_buffers():
+   135→                is_fp32_buffer = False
+   136→                for fp32_name in self.fp32_buffer:
+   137→                    if fp32_name in name:
+   138→                        is_fp32_buffer = True
+   139→                        break
+   140→                if not is_fp32_buffer and buf.is_floating_point():
+   141→                    _logger.info(f'casting {name} to {buffer_dtype}')
+   142→                    buf.data = buf.data.to(buffer_dtype)
+   143→                else:
+   144→                    _logger.info(f'skipping casting for {name}')
+   145→
+   146→        _logger.info(f'Model: {self.model}')
+   147→
+   148→    def forward(self, samples):
+   149→        tokens, context, targets = samples['tokens'], samples['context'], samples['targets']
+   150→        hidden_states, all_routing_map, all_expert_prob = self.model(
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

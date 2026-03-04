@@ -1,0 +1,84 @@
+     1→import torch
+     2→from torch import nn
+     3→from typing import Optional, Tuple, List, Dict
+     4→from kernel.store_kvcache import store_kvcache
+     5→import logging
+     6→from einops import rearrange
+     7→from .config import ModelArgs
+     8→from .ffn import FeedForwardNetwork
+     9→from .moe import MoE
+    10→from .attention import Attention
+    11→from .rms_norm import RMSNorm
+    12→from .linear import MixPrecisionLinear
+    13→logger = logging.getLogger(__name__)
+    14→
+    15→class Block(nn.Module):
+    16→    def __init__(self, index: int, args: ModelArgs):
+    17→        super(Block, self).__init__()
+    18→        self.moe = args.moe and index >= args.dense_layers
+    19→        self.self_attn = Attention(index, args)
+    20→        if self.moe:
+    21→            self.mlp = MoE(args.d_model, args.moe_ffn_dim, args.moe_expert_num, args.moe_top_k, args.d_shared_expert, args.fp8_mode)
+    22→        else:
+    23→            self.mlp = FeedForwardNetwork(args.d_model, args.d_ffn)
+    24→        self.input_layernorm = RMSNorm(args.d_model, eps=args.norm_eps)
+    25→        self.post_attention_layernorm = RMSNorm(args.d_model, eps=args.norm_eps)
+    26→
+    27→    def forward(
+    28→        self,
+    29→        x: torch.Tensor,
+    30→        context: Dict[str, torch.Tensor],
+    31→        yoco_key: Optional[torch.Tensor] = None,
+    32→        yoco_value: Optional[torch.Tensor] = None,
+    33→    ) -> torch.Tensor:
+    34→        r = self.self_attn(self.input_layernorm(x), context=context, yoco_key=yoco_key, yoco_value=yoco_value)
+    35→        h = x + r.float()
+    36→        if self.moe:
+    37→            r, routing_map, expert_prob = self.mlp(self.post_attention_layernorm(h))
+    38→        else:
+    39→            r, routing_map, expert_prob = self.mlp(self.post_attention_layernorm(h)), None, None
+    40→        out = h + r.float()
+    41→        return out, routing_map, expert_prob
+    42→
+    43→
+    44→class Model(nn.Module):
+    45→
+    46→    def __init__(self, args: ModelArgs):
+    47→        super(Model, self).__init__()
+    48→        self.args = args
+    49→        self.tok_embeddings = nn.Embedding(args.vocab_size, args.d_model)
+    50→        nn.init.normal_(self.tok_embeddings.weight, mean=0, std=1)
+    51→
+    52→        self.layers = nn.ModuleList()
+    53→        for index in range(args.n_layers):
+    54→            block = Block(index,args)
+    55→            self.layers.append(block)
+    56→        
+    57→        self.norm = RMSNorm(args.d_model, eps=args.norm_eps)
+    58→        self.output = MixPrecisionLinear(args.d_model, args.vocab_size, bias=False)
+    59→        if args.yoco_cross_layers > 0:
+    60→            self.yoco_norm = RMSNorm(args.d_model, eps=args.norm_eps)
+    61→            self.k_proj = MixPrecisionLinear(args.d_model, args.kv_head * args.head_dim, bias=args.attention_bias)
+    62→            self.v_proj = MixPrecisionLinear(args.d_model, args.kv_head * args.head_dim, bias=args.attention_bias)
+    63→
+    64→        if args.weight_tying:
+    65→            self.output.weight = self.tok_embeddings.weight
+    66→        
+    67→    def forward(
+    68→        self,
+    69→        tokens: torch.Tensor,
+    70→        context: Dict[str, torch.Tensor],
+    71→        last_hidden_only: bool = False,
+    72→    ) -> torch.Tensor:
+    73→        h = self.tok_embeddings(tokens).float()
+    74→        all_routing_map, all_expert_prob = [], []
+    75→        for _ in range(self.args.universal_loop):
+    76→            for layer in self.layers[:self.args.n_layers - self.args.yoco_cross_layers]:
+    77→                h, routing_map, expert_prob = layer(h, context=context)
+    78→                if routing_map is not None:
+    79→                    all_routing_map.append(routing_map)
+    80→                    all_expert_prob.append(expert_prob)
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

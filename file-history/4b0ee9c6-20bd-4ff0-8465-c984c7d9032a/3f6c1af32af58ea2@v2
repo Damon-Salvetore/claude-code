@@ -1,0 +1,189 @@
+"""NVFP4 (FP4 E2M1) fake quantization for training.
+
+Implements the NVFP4 W4A4 fake quantization algorithm with two-level quantization,
+matching the NVIDIA TensorRT Model Optimizer (modelopt) NVFP4 specification:
+  - Level 1: Elements quantized to FP4 E2M1 (block size = 16)
+  - Level 2: Per-block scale factors quantized to FP8 E4M3
+
+Reference: NVIDIA TensorRT-Model-Optimizer NVFP4_DEFAULT_CFG
+  - num_bits: (2, 1)  = FP4 E2M1
+  - scale_bits: (4, 3) = FP8 E4M3
+  - block_size: 16
+
+Key design:
+  - Pure PyTorch implementation with @torch.compile optimization
+  - Block size = 16 (NVFP4 standard)
+  - Per-block dynamic amax (no calibration needed)
+  - Two-level quantization: FP4 elements + FP8 E4M3 block scales
+  - STE (Straight-Through Estimator) backward: gradient passes through unchanged
+  - FP4 E2M1 format: 16 quantization levels (8 positive + 8 negative)
+
+Usage:
+  from kernel.nvfp4_quant import nvfp4_fake_quant
+  x_quantized = nvfp4_fake_quant(x)  # forward: fake quant, backward: STE
+"""
+
+import torch
+
+# FP4 E2M1 quantization values (positive side, 8 levels)
+# Format: sign(1) + exponent(2) + mantissa(1) = 4 bits
+# Values: 0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0
+_FP4_VALUES = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+
+# Decision boundaries for nearest-value rounding (midpoints between consecutive FP4 values)
+# Used with searchsorted: if abs_scaled falls in [bounds[i-1], bounds[i]), map to values[i]
+_FP4_BOUNDS = [0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0]
+
+# FP4 E2M1 max representable value
+_FP4_MAX = 6.0
+
+# FP8 E4M3 max representable value: 2^(2^3 - 1 - 7) * (1 + 0.875) = 2^7 * 1.875 = 448.0
+# E4M3: 4 exponent bits, 3 mantissa bits, bias=7, no inf (NaN only at all-1s)
+_FP8_E4M3_MAX = 448.0
+
+# Default block size for NVFP4 quantization
+NVFP4_BLOCK_SIZE = 16
+
+
+def _get_fp4_tables(device: torch.device):
+    """Get FP4 value and boundary tables on the specified device."""
+    values = torch.tensor(_FP4_VALUES, dtype=torch.float32, device=device)
+    bounds = torch.tensor(_FP4_BOUNDS, dtype=torch.float32, device=device)
+    return values, bounds
+
+
+@torch.compile
+def _fp8_e4m3_fake_quant(x: torch.Tensor, amax: torch.Tensor) -> torch.Tensor:
+    """Fake-quantize tensor to FP8 E4M3 format and dequantize back.
+
+    Matches NVIDIA modelopt's scaled_e4m3_impl:
+      1. Compute scale = FP8_MAX / amax (maps amax to FP8 max representable value)
+      2. Scale input: x_scaled = x * scale
+      3. Cast to torch.float8_e4m3fn (quantize) then back to float32 (dequantize)
+      4. Unscale: result = x_fp8 / scale
+
+    The cast to float8_e4m3fn introduces the FP8 quantization noise:
+    - 4 exponent bits, 3 mantissa bits → ~6.25% relative precision per value
+    - Dynamic range: [~1.95e-10, 448.0]
+    - Values outside [-448, 448] are clamped by the hardware cast
+
+    Args:
+        x: Input tensor (per-block scale factors), shape [num_blocks, 1].
+        amax: Global amax of the scale factors (scalar or broadcastable).
+
+    Returns:
+        Fake-quantized tensor with same shape and dtype as input.
+    """
+    # scale maps the global amax to FP8 max (448.0), utilizing full FP8 dynamic range
+    fp8_scale = (_FP8_E4M3_MAX / amax.clamp(min=1e-12))
+    # Scale up → cast to FP8 (quantize) → cast back to FP32 (dequantize) → scale down
+    x_scaled = x * fp8_scale
+    x_fp8 = x_scaled.to(torch.float8_e4m3fn).to(torch.float32)
+    return x_fp8 / fp8_scale
+
+
+@torch.compile
+def _nvfp4_fake_quant_impl(x: torch.Tensor, fp4_values: torch.Tensor, fp4_bounds: torch.Tensor) -> torch.Tensor:
+    """NVFP4 fake quantization core implementation (pure PyTorch, torch.compile optimized).
+
+    Implements the full NVIDIA NVFP4 two-level quantization:
+      Level 1 - Element quantization (FP4 E2M1):
+        1. Compute per-block amax (dynamic, no calibration needed)
+        2. Compute scale = amax / 6.0 (FP4 max representable value)
+        3. Quantize scale to FP8 E4M3 (Level 2, see below)
+        4. Normalize: abs_scaled = |x| / quantized_scale
+        5. Map to nearest FP4 E2M1 value via searchsorted on boundary table
+        6. Reconstruct: output = sign(x) * fp4_value * quantized_scale
+
+      Level 2 - Scale quantization (FP8 E4M3):
+        1. Compute global_amax = max(all per-block scales)
+        2. Fake-quantize each per-block scale to FP8 E4M3 using global_amax
+
+    This matches NVIDIA TensorRT-Model-Optimizer's NVFP4_DEFAULT_CFG:
+      num_bits=(2,1), scale_bits=(4,3), block_size=16
+
+    Args:
+        x: Input tensor, total elements must be divisible by NVFP4_BLOCK_SIZE (16).
+        fp4_values: FP4 E2M1 value lookup table [8].
+        fp4_bounds: FP4 E2M1 decision boundary table [7].
+
+    Returns:
+        Fake-quantized tensor with same shape and dtype as input.
+    """
+    orig_shape = x.shape
+    orig_dtype = x.dtype
+
+    # Flatten to [num_blocks, block_size=16]
+    x_flat = x.reshape(-1, NVFP4_BLOCK_SIZE).float()
+
+    # Per-block dynamic amax and scale
+    # scale = amax / 6.0, clamped to avoid division by zero
+    amax = x_flat.abs().amax(dim=-1, keepdim=True)
+    scale = (amax / _FP4_MAX).clamp(min=1e-12)
+
+    # Level 2: Quantize per-block scales to FP8 E4M3
+    # This matches modelopt's double quantization: scale_bits=(4,3)
+    # global_amax is used to compute the FP8 scaling factor for the scales themselves
+    global_amax = scale.amax()  # scalar: max of all per-block scales
+    scale = _fp8_e4m3_fake_quant(scale, global_amax)
+
+    # Normalize to FP4 range: [0, 6.0]
+    abs_scaled = x_flat.abs() / scale
+
+    # Map to nearest FP4 E2M1 value using searchsorted
+    # searchsorted returns index i such that bounds[i-1] <= abs_scaled < bounds[i]
+    # Then values[i] is the nearest FP4 value
+    indices = torch.searchsorted(fp4_bounds, abs_scaled)
+    q_val = fp4_values[indices]
+
+    # Reconstruct: sign * quantized_value * quantized_scale
+    result = x_flat.sign() * q_val * scale
+
+    return result.to(orig_dtype).reshape(orig_shape)
+
+
+class NvFP4FakeQuant(torch.autograd.Function):
+    """NVFP4 fake quantization with STE (Straight-Through Estimator) backward.
+
+    Forward: two-level quantize + dequantize (introduces quantization noise)
+      - Level 1: elements → FP4 E2M1 (block size 16)
+      - Level 2: per-block scales → FP8 E4M3
+    Backward: gradient passes through unchanged (pure STE, no tensor saved)
+
+    This matches Model-Optimizer's pass_through_bwd=True behavior:
+    - No forward tensors saved (memory efficient)
+    - Gradient identity: dL/dx = dL/d(output)
+    - Suitable for dynamic quantization where amax is recomputed each forward
+    """
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+        fp4_values, fp4_bounds = _get_fp4_tables(x.device)
+        return _nvfp4_fake_quant_impl(x, fp4_values, fp4_bounds)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        # Pure STE: gradient passes through unchanged
+        return grad_output
+
+
+def nvfp4_fake_quant(x: torch.Tensor) -> torch.Tensor:
+    """Apply NVFP4 (FP4 E2M1) fake quantization with STE gradient.
+
+    Implements the full NVIDIA NVFP4 two-level quantization:
+      - Elements: FP4 E2M1 (block size 16, nearest-value rounding)
+      - Per-block scales: FP8 E4M3 (dynamic, global amax)
+
+    Quantizes the input tensor and immediately dequantizes, introducing
+    quantization noise in the forward pass while allowing gradients to flow
+    through unchanged in the backward pass (Straight-Through Estimator).
+
+    The tensor's total number of elements must be divisible by 16 (NVFP4 block size).
+
+    Args:
+        x: Input tensor. numel() must be divisible by 16.
+
+    Returns:
+        Fake-quantized tensor with same shape and dtype as input.
+    """
+    return NvFP4FakeQuant.apply(x)

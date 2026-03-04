@@ -1,0 +1,67 @@
+     1→from dataclasses import dataclass
+     2→
+     3→
+     4→@dataclass
+     5→class ModelArgs:
+     6→    d_model: int = 4096
+     7→    d_ffn: int = 14336
+     8→    head: int = 32
+     9→    cross_head: int = None
+    10→    kv_head: int = 8
+    11→    head_dim: int = None
+    12→    n_layers: int = 32
+    13→    vocab_size: int = 201088
+    14→    max_seq_len: int = 4096
+    15→    norm_eps: float = 1e-6
+    16→    rope_theta: float = 10000.0
+    17→    qk_norm: bool = False
+    18→    attention_bias: bool = False
+    19→    weight_tying: bool = False
+    20→    cross_entropy_chunk: int = 1
+    21→    gated_attention: bool = False
+    22→    diff_attention: bool = False
+    23→    # YOCO config
+    24→    yoco_cross_layers: int = 0
+    25→    yoco_window_size: int = 256
+    26→    universal_loop: int = 1
+    27→    # moe
+    28→    moe: bool = False
+    29→    moe_ffn_dim: int = 512
+    30→    moe_expert_num: int = 32
+    31→    moe_top_k: int = 8
+    32→    moe_loss_scale: float = 0.1
+    33→    # global: global load balance;
+    34→    # domain: load balance within each domain;
+    35→    # subset: use "tag":"instruction,disable_balance_loss" to disable load balance loss for some sets.
+    36→    #   This is useful when adding new data sets (e.g. instruction/high-quality data) to an existing
+    37→    #   pre-training mixture. The idea is to only compute balance loss on the original PT data portion
+    38→    #   to keep expert routing stable, while the newly added sets have their balance loss weight set to
+    39→    #   zero (by tagging them with "disable_balance_loss"). As long as the original PT data's expert
+    40→    #   distribution remains unchanged, it prevents expert drift/mutation even when the new sets don't
+    41→    #   contribute to the balance loss. For example, if new data is 15% and original PT data is 85%,
+    42→    #   only the 85% PT data computes balance loss, which is sufficient to maintain routing stability.
+    43→    balance_mode: str = 'global'
+    44→    d_shared_expert: int = 0
+    45→    dense_layers: int = 0
+    46→    # if set, each rank in a scale unit whose size is `plan_ngpus` will read different data shard,
+    47→    # and the dataloader config is set w.r.t each rank. Before feeding into the model, a allgather
+    48→    # will be performed to gather the data from all ranks in the scale unit. If not set, each rank
+    49→    # will read the same data shard, and the dataloader config is set w.r.t the scale unit.
+    50→    dp_sharded: bool = False
+    51→    # if set, use cute flash attention implementation
+    52→    use_cute: bool = False
+    53→    z_loss_scale: float = 0.0
+    54→    z_loss_start_step: int = 10000
+    55→    z_loss_warmup_step: int = 1000
+    56→    fp8_mode: int = 0  # 0: disable, 1: fp8 fake quant, 2: fp8 quant
+    57→
+    58→    def __post_init__(self):
+    59→        if self.head_dim is None:
+    60→            self.head_dim = self.d_model // self.head
+    61→        if self.cross_head is None:
+    62→            self.cross_head = self.head
+    63→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

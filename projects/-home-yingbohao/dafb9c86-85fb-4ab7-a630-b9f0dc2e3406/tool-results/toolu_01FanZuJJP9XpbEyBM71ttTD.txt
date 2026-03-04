@@ -1,0 +1,204 @@
+   150→        hidden_states, all_routing_map, all_expert_prob = self.model(
+   151→            tokens=tokens,
+   152→            context=context,
+   153→            last_hidden_only=True,
+   154→        )
+   155→        losses, z_losses = inner_chunk_linear_cross_entropy(hidden_states, self.model.output.weight, targets, self.xentropy_chunk_size, self.xentropy_recompute)
+   156→        return losses, z_losses, all_routing_map, all_expert_prob, tokens.size(0)
+   157→
+   158→
+   159→class WrapperModel(torch.nn.Module):
+   160→    def __init__(self, model_args, xentropy_chunk_size, xentropy_recompute, precision):
+   161→        super().__init__()
+   162→        self.model_args = model_args
+   163→        self.backbone = BackBone(model_args, xentropy_chunk_size, xentropy_recompute, precision)
+   164→        self.moe_loss = MoELoss(model_args) if model_args['moe'] else None
+   165→        self.moe_loss_scale = model_args['moe_loss_scale']
+   166→        self.z_loss_scale = model_args['z_loss_scale']
+   167→
+   168→    def forward(self, samples):
+   169→        losses, z_losses, all_routing_map, all_expert_prob, batch_size = self.backbone(samples)
+   170→        loss_mask, loss_index, tag_index, dataset_length, tag_length = samples['loss_mask'], samples['loss_index'], samples['tag_index'], samples['dataset_length'], samples['tag_length']
+   171→        with torch.no_grad():
+   172→            per_source_loss = torch.bincount(loss_index, losses * loss_mask, dataset_length)
+   173→            per_source_n_tokens = torch.bincount(loss_index, loss_mask, dataset_length)
+   174→        loss = torch.sum(losses * loss_mask)
+   175→        z_loss = torch.sum(z_losses * loss_mask)
+   176→        n_tokens = loss_mask.sum()
+   177→        lm_loss = loss.data
+   178→        loss = loss + self.z_loss_scale * z_loss
+   179→        if self.model_args['moe']:
+   180→            aux_loss = self.moe_loss(all_routing_map, all_expert_prob, tag_index, loss_mask, tag_length)
+   181→            moe_loss = aux_loss.data
+   182→            loss = loss + self.moe_loss_scale * aux_loss
+   183→        else:
+   184→            moe_loss = None
+   185→        return loss, lm_loss, z_loss, n_tokens, batch_size, moe_loss, per_source_loss, per_source_n_tokens
+   186→
+   187→
+   188→def aggregate_outputs_fn(loss_outputs, sync_group) -> AggregatedOutputs:
+   189→    losses, z_losses, ntokens_info = [], [], []
+   190→    per_source_losses, per_source_n_tokens_info = [], []
+   191→    moe_losses = []
+   192→    for _, loss, z_loss, ntokens, _, moe_loss, per_source_loss, per_source_n_tokens in loss_outputs:
+   193→        losses.append(loss)
+   194→        z_losses.append(z_loss)
+   195→        ntokens_info.append(ntokens)
+   196→        moe_losses.append(moe_loss)
+   197→        per_source_losses.append(per_source_loss)
+   198→        per_source_n_tokens_info.append(per_source_n_tokens)
+   199→
+   200→    loss_sum = torch.sum(torch.stack(losses), dtype=torch.float64)
+   201→    torch.distributed.all_reduce(loss_sum, group=sync_group)
+   202→    z_loss_sum = torch.sum(torch.stack(z_losses), dtype=torch.float64)
+   203→    torch.distributed.all_reduce(z_loss_sum, group=sync_group)
+   204→    ntokens_sum = torch.sum(torch.tensor(ntokens_info, dtype=torch.float64, device=torch.cuda.current_device()))
+   205→    torch.distributed.all_reduce(ntokens_sum, group=sync_group)
+   206→    per_source_loss_sum = torch.sum(torch.stack(per_source_losses, dim=0), dim=0)
+   207→    torch.distributed.all_reduce(per_source_loss_sum, group=sync_group)
+   208→    per_source_n_tokens_sum = torch.sum(torch.stack(per_source_n_tokens_info, dim=0), dim=0)
+   209→    torch.distributed.all_reduce(per_source_n_tokens_sum, group=sync_group)
+   210→    num_batches = torch.tensor(len(losses), device=torch.cuda.current_device())
+   211→    torch.distributed.all_reduce(num_batches, group=sync_group)
+   212→    if moe_losses[0] is not None:
+   213→        moe_loss_sum = torch.sum(torch.stack(moe_losses), dtype=torch.float64)
+   214→        torch.distributed.all_reduce(moe_loss_sum, group=sync_group)
+   215→        moe_loss_sum = moe_loss_sum.item() / ntokens_sum.item()
+   216→    else:
+   217→        moe_loss_sum = None
+   218→
+   219→    per_source_losses = per_source_loss_sum / per_source_n_tokens_sum / math.log(2)
+   220→    per_source_losses = torch.where(per_source_n_tokens_sum > 0, per_source_losses, torch.zeros_like(per_source_losses))
+   221→    aggregated_outputs = {
+   222→        'z_loss': z_loss_sum.item() / ntokens_sum.item(),
+   223→        'per_source_losses': per_source_losses.tolist(),
+   224→        'per_source_n_tokens': per_source_n_tokens_sum.tolist(),
+   225→    }
+   226→    if moe_loss_sum is not None:
+   227→        aggregated_outputs['moe_loss'] = moe_loss_sum
+   228→    return AggregatedOutputs(
+   229→        loss_sum=loss_sum.item() / ntokens_sum.item() / math.log(2),
+   230→        num_batches=num_batches.item(),
+   231→        num_tokens=ntokens_sum.item(),
+   232→        aggregated_outputs=aggregated_outputs,
+   233→    )
+   234→
+   235→
+   236→class MockDataset:
+   237→    pass
+   238→
+   239→
+   240→class Sampler:
+   241→    def __init__(self, dataset, num_replicas, rank, seed, shuffle, prefetch):
+   242→        self.dataset = dataset
+   243→        self.num_replicas = num_replicas
+   244→        self.rank = rank
+   245→        self.seed = seed
+   246→        self.shuffle = shuffle
+   247→        self.prefetch = prefetch
+   248→
+   249→
+   250→class WrapperLMLoader:
+   251→    def __init__(self, dataset, batch_size, sampler, args, device, drop_last, dp_sharded):
+   252→        self.dataset = dataset
+   253→        self.batch_size = batch_size
+   254→        self.sampler = sampler
+   255→        self.num_workers = 0
+   256→
+   257→        if dp_sharded:
+   258→            num_shards = dist.get_world_size()
+   259→            shard_id = dist.get_rank()
+   260→        else:
+   261→            num_shards = sampler.num_replicas
+   262→            shard_id = sampler.rank
+   263→
+   264→        self.loader = DataLoader(
+   265→            args=DataLoaderArgs(**args),
+   266→            seed=sampler.seed,
+   267→            shuffle=sampler.shuffle,
+   268→            # prefetch=False,
+   269→            prefetch=sampler.prefetch,
+   270→            num_shards=num_shards,
+   271→            shard_id=shard_id,
+   272→            device=device
+   273→        )
+   274→        self.drop_last = drop_last
+   275→
+   276→    def __iter__(self):
+   277→        return iter(self.loader)
+   278→
+   279→    def __next__(self):
+   280→        return next(self.loader)
+   281→
+   282→    def __len__(self):
+   283→        return 100000000
+   284→
+   285→
+   286→def main(model_args, data_args, trainer_args, args):
+   287→
+   288→    if args.run_mode == 'run':
+   289→        broadcast_strategy = args.broadcast_strategy
+   290→    else:
+   291→        broadcast_strategy = 'none'
+   292→
+   293→    # need to call this to setup the logger, like formatting, although the level will be reset later
+   294→    set_default_logger_level('INFO')
+   295→    # if trainer_args.gc_freq > 0:
+   296→    #     gc.disable()
+   297→    #     gc.collect(1)
+   298→
+   299→    dataset = MockDataset()
+   300→
+   301→    ## Config Trainer ##
+   302→
+   303→    if args.run_mode == 'compile':
+   304→        if args.runtime_ngpus is None:
+   305→            raise ValueError('runtime_ngpus must be specified in compile mode')
+   306→        runtime_ngpus = args.runtime_ngpus
+   307→    elif args.run_mode == 'run':
+   308→        if trainer_args.dist_shared_file_path is not None:
+   309→            # Define a unique path on your SHARED file system
+   310→            #    CRITICAL: This path must be visible and writable by ALL nodes.
+   311→            #    Tip: Use a unique ID (like SLURM_JOB_ID) to prevent collisions between jobs.
+   312→            if "VOLCANO_JOB_NAME" in os.environ:
+   313→                shared_file_path = os.path.join(trainer_args.dist_shared_file_path, os.environ["VOLCANO_JOB_NAME"])
+   314→            elif "AMLT_EXPERIMENT_NAME" in os.environ and "AMLT_JOB_NAME" in os.environ:
+   315→                shared_file_path = os.path.join(trainer_args.dist_shared_file_path, f"{os.environ['AMLT_EXPERIMENT_NAME']}_{os.environ['AMLT_JOB_NAME']}")
+   316→            else:
+   317→                shared_file_path = trainer_args.dist_shared_file_path
+   318→            setup_distributed(shared_file_path)
+   319→
+   320→        assert 'WORLD_SIZE' in os.environ, 'WORLD_SIZE environment variable is not set'
+   321→        world_size = int(os.getenv('WORLD_SIZE'))
+   322→        if args.runtime_ngpus is None:
+   323→            runtime_ngpus = world_size
+   324→        else:
+   325→            if args.runtime_ngpus != world_size:
+   326→                raise ValueError('runtime_ngpus must match the number of GPUs in run mode')
+   327→            runtime_ngpus = args.runtime_ngpus
+   328→    if runtime_ngpus % args.plan_ngpus != 0:
+   329→        raise ValueError('runtime_ngpus must be a multiple of plan_ngpus')
+   330→
+   331→    # Compute zero_ngroups from zero_group_size
+   332→    # runtime_ngpus = zero_ngroups * zero_group_size
+   333→    if args.zero_group_size is None:
+   334→        zero_group_size = runtime_ngpus
+   335→    else:
+   336→        zero_group_size = args.zero_group_size
+   337→
+   338→    if runtime_ngpus % zero_group_size != 0:
+   339→        raise ValueError(f'runtime_ngpus ({runtime_ngpus}) must be divisible by zero_group_size ({zero_group_size})')
+   340→
+   341→    zero_ngroups = runtime_ngpus // zero_group_size
+   342→
+   343→    register_serialization_runner(SplitSerializationRunner)
+   344→    register_serialization_runner(Norm2SplitSerializationRunner)
+   345→
+   346→    compute_config = ComputeConfig(
+   347→        plan_ngpus=args.plan_ngpus,
+   348→        runtime_ngpus=runtime_ngpus,
+   349→        constant_folding=True,
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

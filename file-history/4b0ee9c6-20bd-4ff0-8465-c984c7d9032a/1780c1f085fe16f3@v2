@@ -1,0 +1,178 @@
+# NVFP4 W4A4 量化实验配置简介
+
+## 1. 实验目标
+
+评估 **NVFP4 W4A4 伪量化**对不同注意力架构的训练影响。
+- **对照组**：标准混合精度训练（权重 FP32，前向 BF16，梯度 FP32）
+- **实验组**：在前向传播中插入 NVFP4 伪量化，模拟 Blackwell GPU 的 FP4 推理精度
+- **评估指标**：训练损失（BPB）、梯度范数、收敛速度
+
+---
+
+## 2. 模型架构
+
+4 种模型，参数量 ~0.7B，均为标准 Transformer（非 YOCO），仅在注意力机制上做控制变量：
+
+| 模型 | Gated Attention | Differential Attention | 参数量 |
+|------|:-:|:-:|--------|
+| Base-0.4B | - | - | ~701M |
+| GatedAttn-0.4B | **✓** | - | ~726M |
+| DiffAttn-0.4B | - | **✓** | ~726M |
+| GatedDiffAttn-0.4B | **✓** | **✓** | ~752M |
+
+**统一架构参数：**
+
+| 参数 | 值 |
+|------|-----|
+| d_model | 1024 |
+| d_ffn | 3072 |
+| n_layers | 24 |
+| head / kv_head | 16 / 4（GQA） |
+| head_dim | 64 |
+| vocab_size | 201,088 |
+| 位置编码 | RoPE（θ=500,000） |
+
+---
+
+## 3. NVFP4 伪量化实现
+
+完整匹配 NVIDIA TensorRT-Model-Optimizer 的 **NVFP4_DEFAULT_CFG** 规范，三级量化体系：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Level 3: Global Scale (FP32)                                │
+│   global_scale = max(block_scales) / 448.0                  │
+│   → 整个张量共享一个 FP32 标量                                │
+│                                                             │
+│ Level 2: Per-Block Scale (FP8 E4M3)                         │
+│   block_scale = block_amax / 6.0                            │
+│   block_scale_fp8 = torch.float8_e4m3fn cast (fake quant)   │
+│   → 每 16 个元素共享一个 FP8 尺度因子                         │
+│                                                             │
+│ Level 1: Values (FP4 E2M1)                                  │
+│   normalized = |x| / block_scale_fp8                        │
+│   quantized = round_to_nearest_fp4(normalized)              │
+│   → 每个元素量化到 4-bit，16 个量化级别                       │
+│                                                             │
+│ 还原: output = sign(x) × fp4_value × block_scale_fp8        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**FP4 E2M1 量化值表（8 个正值 + 8 个负值 = 16 级）：**
+
+```
+{0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0} × {+, -}
+```
+
+**关键实现细节：**
+
+| 项目 | 规范 |
+|------|------|
+| 元素格式 | FP4 E2M1（4-bit：1 sign + 2 exponent + 1 mantissa） |
+| Block scale 格式 | FP8 E4M3（`torch.float8_e4m3fn` 原生 cast） |
+| Global scale 格式 | FP32（隐含在 FP8 fake quant 的 scale-up/down 中） |
+| Block size | 16 |
+| 舍入策略 | 最近值舍入（midpoint boundary） |
+| 反向传播 | STE 纯直通（不保存前向张量，不裁剪梯度） |
+| 实现方式 | 纯 PyTorch + `@torch.compile` |
+| 量化起始 | Step 0（从头训练，无预热跳过） |
+
+---
+
+## 4. 量化范围（`nvfp4_mode`）
+
+| 模式 | 值 | 量化范围 | 说明 |
+|------|:--:|---------|------|
+| baseline | 0 | 无 | 标准混合精度 |
+| nvfp4 | 1 | **FFN 层** | up/gate/down_proj 的权重(W4)和激活(A4) |
+| nvfp4_full | 2 | **FFN + Attention** | 模式 1 + Q/K/V/O 投影的权重和激活 |
+
+**FFN 层量化数据流（mode ≥ 1）：**
+
+```
+输入 x ──[A4]──→ x_fq ──┬── matmul(x_fq, [W4](up_proj.weight)) ──→ up
+                         └── matmul(x_fq, [W4](gate_proj.weight)) ──→ gate
+                                   ↓
+                               SwiGLU(up, gate)
+                                   ↓
+                         intermediate ──[A4]──→ inter_fq
+                                   ↓
+                         matmul(inter_fq, [W4](down_proj.weight)) ──→ output
+```
+
+**不量化的层：** Embedding、LM Head、RMSNorm、lambda_proj（Diff Attention）
+
+---
+
+## 5. 训练配置
+
+| 参数 | 值 |
+|------|-----|
+| 数据集 | FineWeb-1BT（1B token 真实网页文本） |
+| 序列长度 | 4096 |
+| Packing | FFD（first-fit decreasing） |
+| 优化器 | AdamW（β₁=0.9, β₂=0.95, ε=1e-8） |
+| 权重衰减 | 0.1（Embedding 除外） |
+| 学习率 | 6e-4（Warmup 2K 步 → 余弦衰减 → 3e-5） |
+| 训练步数 | 10,000 updates |
+| 梯度裁剪 | max_norm = 1.0 |
+| 精度 | 权重 FP32 / 前向 BF16 / 梯度 FP32（MixPrecisionLinear） |
+| Batch size | 2 per GPU × 4 GPU × 2 gradient accum = **16 序列/step** |
+| Tokens/step | 16 × 4096 = **65,536 tokens** |
+| 总训练量 | 10K × 65,536 ≈ **655M tokens** |
+| 种子 | 42（所有实验相同，保证数据顺序一致） |
+
+---
+
+## 6. 硬件与并行
+
+| 项目 | 配置 |
+|------|------|
+| GPU | 4 × NVIDIA B200 180GB（Blackwell） |
+| 框架 | nnscaler + ZeRO（group_size=4） |
+| 通信 | NCCL |
+| 每卡显存占用 | ~15-19GB（远低于 180GB） |
+
+---
+
+## 7. 实验矩阵
+
+当前跑的 8 个实验（4 模型 × 2 模式，串行执行）：
+
+| # | 实验名 | 模型 | 模式 |
+|---|--------|------|------|
+| 1 | Base-0.4B-baseline | Base | 无量化 |
+| 2 | Base-0.4B-nvfp4 | Base | FFN W4A4 |
+| 3 | GatedAttn-0.4B-baseline | GatedAttn | 无量化 |
+| 4 | GatedAttn-0.4B-nvfp4 | GatedAttn | FFN W4A4 |
+| 5 | DiffAttn-0.4B-baseline | DiffAttn | 无量化 |
+| 6 | DiffAttn-0.4B-nvfp4 | DiffAttn | FFN W4A4 |
+| 7 | GatedDiffAttn-0.4B-baseline | GatedDiffAttn | 无量化 |
+| 8 | GatedDiffAttn-0.4B-nvfp4 | GatedDiffAttn | FFN W4A4 |
+
+每个实验 ~55 分钟，8 个串行共 ~7-8 小时。
+
+---
+
+## 8. 与 NVIDIA 官方实现的对比
+
+| 项目 | NVIDIA Model-Optimizer | 本实验 |
+|------|----------------------|--------|
+| 量化算法 | FP4 E2M1 + FP8 E4M3 scale | **完全一致** |
+| Block size | 16 | **16** |
+| FP8 scale 量化 | Triton/CUDA kernel cast | `torch.float8_e4m3fn` 原生 cast（**数值等价**） |
+| Global scale | FP32 | **FP32**（隐含在 FP8 fake quant 流程中） |
+| STE 反向传播 | `pass_through_bwd=True` | **纯直通**（一致） |
+| 训练方式 | 已有 checkpoint → QAT 微调 | **Train from scratch**（从 step 0 带量化） |
+| 校准 | 需要 calibration forward | **不需要**（动态 per-block amax） |
+| 实现依赖 | Triton + CUDA ext + modelopt 框架 | **纯 PyTorch**（torch.compile） |
+
+**核心结论：量化算法与 NVIDIA NVFP4 规范数值一致，仅工程框架做了简化（不影响量化精度）。**
+
+---
+
+## 9. WandB 面板
+
+- **Entity:** `3259482542-south-china-university-of-technology`
+- **Project:** `nvfp4_experiment`
+- **链接:** https://wandb.ai/3259482542-south-china-university-of-technology/nvfp4_experiment

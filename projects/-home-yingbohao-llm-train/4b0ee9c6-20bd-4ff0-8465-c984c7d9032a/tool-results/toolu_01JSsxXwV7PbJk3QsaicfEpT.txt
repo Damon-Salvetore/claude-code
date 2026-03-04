@@ -1,0 +1,1035 @@
+     1→#  Copyright (c) Microsoft Corporation.
+     2→#  Licensed under the MIT License.
+     3→
+     4→import argparse
+     5→import math
+     6→import os
+     7→import gc
+     8→from dataclasses import asdict
+     9→import logging
+    10→import threading
+    11→import psutil
+    12→import requests
+    13→
+    14→import torch
+    15→import torch.distributed as dist
+    16→
+    17→import nnscaler
+    18→from nnscaler.utils import set_default_logger_level
+    19→from nnscaler.cli.trainer import Trainer
+    20→from nnscaler.cli.trainer_args import (
+    21→    CheckpointConfig,
+    22→    DatasetConfig,
+    23→    HookMapConfig,
+    24→    ModelConfig,
+    25→    OptimizerConfig,
+    26→    TrainerArgs,
+    27→    DataloaderConfig,
+    28→    AggregatedOutputs,
+    29→    LogConfig,
+    30→    DatasetSamplerConfig,
+    31→    LRSchedulerConfig,
+    32→    ResumeOptions,
+    33→    ModuleParallelizeConfig,
+    34→    SerializerOptions,
+    35→)
+    36→from nnscaler.parallel import ComputeConfig, BroadcastGenFilesStrategy
+    37→from nnscaler.runtime.f16_optimizer import MixedPrecisionAdamW
+    38→from nnscaler.cli.loggers.tensorboard import TensorBoardLogger
+    39→from nnscaler.cli.loggers.wandb import WandbLogger
+    40→from nnscaler.runtime.device import DeviceGroup
+    41→from nnscaler.policies import pas_autodist
+    42→from nnscaler.ir.operator import IRFwOperation
+    43→from nnscaler.cli.serialization import register_serialization_runner
+    44→
+    45→# llm.py start
+    46→from arch.model import ModelArgs, Model
+    47→from arch.flop_utils import estimate_flops, estimate_total_params, estimate_activated_params_moe
+    48→import config
+    49→from data.lm_loader import LMLoader, DataLoaderArgs
+    50→from data.data_loader import DataLoader
+    51→from warmup_scheduler import WarmupCosineAnnealingLR
+    52→from kernel.vocab_parallel_cross_entropy import inner_chunk_linear_cross_entropy
+    53→import nnscaler_funcs
+    54→from file_dist_init import setup_distributed
+    55→from ckpt import SplitSerializationRunner, Norm2SplitSerializationRunner
+    56→# llm.py end
+    57→
+    58→_logger = logging.getLogger(__name__)
+    59→
+    60→
+    61→class MoELoss(torch.nn.Module):
+    62→    def __init__(self, model_args):
+    63→        super().__init__()
+    64→        self.model_args = model_args
+    65→        self.tokens_per_expert_buffer = None
+    66→        self.sync_group = 'EMPTY'
+    67→        self.scale = model_args['moe_expert_num']
+    68→        self.mode = model_args['balance_mode']
+    69→        assert self.mode in ['global', 'domain', 'subset'], f'Invalid balance mode: {self.mode}'
+    70→
+    71→    def clear_buffer(self):
+    72→        self.tokens_per_expert_buffer = None
+    73→
+    74→    def set_sync_group(self, sync_group):
+    75→        self.sync_group = sync_group
+    76→
+    77→    def forward(self, all_routing_map, all_expert_prob, tag_index, loss_mask, tag_length):
+    78→        if all_routing_map is None or all_expert_prob is None:
+    79→            return None
+    80→
+    81→        # [L, N, E], where L is sequence length, N is token, E is number of experts
+    82→        all_routing_map = all_routing_map.clone() * loss_mask.unsqueeze(-1)
+    83→        if self.mode in ('global', 'subset'):
+    84→            if self.mode == 'subset':
+    85→                tag_mask = tag_index != -1
+    86→                all_routing_map = all_routing_map * tag_mask.unsqueeze(-1)
+    87→                all_expert_prob = all_expert_prob * tag_mask.unsqueeze(-1)
+    88→                # tag_index = tag_index * tag_mask
+    89→            all_tokens_per_expert = all_routing_map.sum(dim=1, keepdim=True)
+    90→        elif self.mode == 'domain':
+    91→            all_tokens_per_expert = torch.zeros(all_routing_map.shape[0], tag_length, all_routing_map.shape[2], device=all_routing_map.device, dtype=torch.float32)
+    92→            all_tokens_per_expert.scatter_add_(dim=1, index=tag_index[None, :, None].repeat(all_routing_map.shape[0], 1, all_routing_map.shape[2]), src=all_routing_map.float())
+    93→
+    94→        if self.sync_group != 'EMPTY':
+    95→            torch.distributed.all_reduce(all_tokens_per_expert, group=self.sync_group, op=torch.distributed.ReduceOp.AVG)
+    96→
+    97→        if self.tokens_per_expert_buffer is None:
+    98→            self.tokens_per_expert_buffer = all_tokens_per_expert
+    99→        else:
+   100→            self.tokens_per_expert_buffer = self.tokens_per_expert_buffer + all_tokens_per_expert
+   101→        normalized_tokens_per_expert = self.tokens_per_expert_buffer / (self.tokens_per_expert_buffer.sum(dim=-1, keepdim=True) + 1e-6)
+   102→        l_aux = torch.bmm(all_expert_prob.float(), normalized_tokens_per_expert.transpose(-1, -2))
+   103→        # [L, N, E] * [L, E, K] -> [L, N, K]
+   104→        if self.mode == 'domain':
+   105→            l_aux = torch.gather(l_aux, dim=2, index=tag_index[None, :, None].repeat(l_aux.shape[0], 1, 1))
+   106→        l_aux = self.scale * l_aux.mean(dim=0).flatten()
+   107→        l_aux = torch.sum(l_aux * loss_mask)
+   108→        return l_aux
+   109→
+   110→
+   111→class BackBone(torch.nn.Module):
+   112→    def __init__(self, model_args, xentropy_chunk_size, xentropy_recompute, precision):
+   113→        super().__init__()
+   114→        # model weights are fp32 if loading from hf ckpts
+   115→        self.model_args = model_args
+   116→        self.model = Model(ModelArgs(**model_args))
+   117→        self.xentropy_chunk_size = xentropy_chunk_size
+   118→        self.xentropy_recompute = xentropy_recompute
+   119→        self.precision = precision
+   120→        self.ignore_index = model_args['vocab_size'] - 1
+   121→        self.fp32_param = ['gate.weight']
+   122→        self.fp32_buffer = ['cos_sin_cache']
+   123→        if self.precision == 'bf16':
+   124→            _logger.info('Casting model parameters to bf16 after optimizer initialization')
+   125→            param_dtype, buffer_dtype = torch.bfloat16, torch.bfloat16
+   126→            # the name `gate.weight`` is replaced to `gate_weight` in nnscaler
+   127→            for name, param in self.model.named_parameters():
+   128→                is_fp32_weight = any(fp32_name in name for fp32_name in self.fp32_param)
+   129→                if not is_fp32_weight and param.is_floating_point() and param.dtype != torch.bfloat16:
+   130→                    _logger.info(f'casting {name} to {param_dtype}')
+   131→                    param.data = param.data.to(param_dtype)
+   132→                else:
+   133→                    _logger.info(f'skipping casting for {name}')
+   134→            for name, buf in self.model.named_buffers():
+   135→                is_fp32_buffer = False
+   136→                for fp32_name in self.fp32_buffer:
+   137→                    if fp32_name in name:
+   138→                        is_fp32_buffer = True
+   139→                        break
+   140→                if not is_fp32_buffer and buf.is_floating_point():
+   141→                    _logger.info(f'casting {name} to {buffer_dtype}')
+   142→                    buf.data = buf.data.to(buffer_dtype)
+   143→                else:
+   144→                    _logger.info(f'skipping casting for {name}')
+   145→
+   146→        _logger.info(f'Model: {self.model}')
+   147→
+   148→    def forward(self, samples):
+   149→        tokens, context, targets = samples['tokens'], samples['context'], samples['targets']
+   150→        hidden_states, all_routing_map, all_expert_prob = self.model(
+   151→            tokens=tokens,
+   152→            context=context,
+   153→            last_hidden_only=True,
+   154→        )
+   155→        losses, z_losses = inner_chunk_linear_cross_entropy(hidden_states, self.model.output.weight, targets, self.xentropy_chunk_size, self.xentropy_recompute)
+   156→        return losses, z_losses, all_routing_map, all_expert_prob, tokens.size(0)
+   157→
+   158→
+   159→class WrapperModel(torch.nn.Module):
+   160→    def __init__(self, model_args, xentropy_chunk_size, xentropy_recompute, precision):
+   161→        super().__init__()
+   162→        self.model_args = model_args
+   163→        self.backbone = BackBone(model_args, xentropy_chunk_size, xentropy_recompute, precision)
+   164→        self.moe_loss = MoELoss(model_args) if model_args['moe'] else None
+   165→        self.moe_loss_scale = model_args['moe_loss_scale']
+   166→        self.z_loss_scale = model_args['z_loss_scale']
+   167→
+   168→    def forward(self, samples):
+   169→        losses, z_losses, all_routing_map, all_expert_prob, batch_size = self.backbone(samples)
+   170→        loss_mask, loss_index, tag_index, dataset_length, tag_length = samples['loss_mask'], samples['loss_index'], samples['tag_index'], samples['dataset_length'], samples['tag_length']
+   171→        with torch.no_grad():
+   172→            per_source_loss = torch.bincount(loss_index, losses * loss_mask, dataset_length)
+   173→            per_source_n_tokens = torch.bincount(loss_index, loss_mask, dataset_length)
+   174→        loss = torch.sum(losses * loss_mask)
+   175→        z_loss = torch.sum(z_losses * loss_mask)
+   176→        n_tokens = loss_mask.sum()
+   177→        lm_loss = loss.data
+   178→        loss = loss + self.z_loss_scale * z_loss
+   179→        if self.model_args['moe']:
+   180→            aux_loss = self.moe_loss(all_routing_map, all_expert_prob, tag_index, loss_mask, tag_length)
+   181→            moe_loss = aux_loss.data
+   182→            loss = loss + self.moe_loss_scale * aux_loss
+   183→        else:
+   184→            moe_loss = None
+   185→        return loss, lm_loss, z_loss, n_tokens, batch_size, moe_loss, per_source_loss, per_source_n_tokens
+   186→
+   187→
+   188→def aggregate_outputs_fn(loss_outputs, sync_group) -> AggregatedOutputs:
+   189→    losses, z_losses, ntokens_info = [], [], []
+   190→    per_source_losses, per_source_n_tokens_info = [], []
+   191→    moe_losses = []
+   192→    for _, loss, z_loss, ntokens, _, moe_loss, per_source_loss, per_source_n_tokens in loss_outputs:
+   193→        losses.append(loss)
+   194→        z_losses.append(z_loss)
+   195→        ntokens_info.append(ntokens)
+   196→        moe_losses.append(moe_loss)
+   197→        per_source_losses.append(per_source_loss)
+   198→        per_source_n_tokens_info.append(per_source_n_tokens)
+   199→
+   200→    loss_sum = torch.sum(torch.stack(losses), dtype=torch.float64)
+   201→    torch.distributed.all_reduce(loss_sum, group=sync_group)
+   202→    z_loss_sum = torch.sum(torch.stack(z_losses), dtype=torch.float64)
+   203→    torch.distributed.all_reduce(z_loss_sum, group=sync_group)
+   204→    ntokens_sum = torch.sum(torch.tensor(ntokens_info, dtype=torch.float64, device=torch.cuda.current_device()))
+   205→    torch.distributed.all_reduce(ntokens_sum, group=sync_group)
+   206→    per_source_loss_sum = torch.sum(torch.stack(per_source_losses, dim=0), dim=0)
+   207→    torch.distributed.all_reduce(per_source_loss_sum, group=sync_group)
+   208→    per_source_n_tokens_sum = torch.sum(torch.stack(per_source_n_tokens_info, dim=0), dim=0)
+   209→    torch.distributed.all_reduce(per_source_n_tokens_sum, group=sync_group)
+   210→    num_batches = torch.tensor(len(losses), device=torch.cuda.current_device())
+   211→    torch.distributed.all_reduce(num_batches, group=sync_group)
+   212→    if moe_losses[0] is not None:
+   213→        moe_loss_sum = torch.sum(torch.stack(moe_losses), dtype=torch.float64)
+   214→        torch.distributed.all_reduce(moe_loss_sum, group=sync_group)
+   215→        moe_loss_sum = moe_loss_sum.item() / ntokens_sum.item()
+   216→    else:
+   217→        moe_loss_sum = None
+   218→
+   219→    per_source_losses = per_source_loss_sum / per_source_n_tokens_sum / math.log(2)
+   220→    per_source_losses = torch.where(per_source_n_tokens_sum > 0, per_source_losses, torch.zeros_like(per_source_losses))
+   221→    aggregated_outputs = {
+   222→        'z_loss': z_loss_sum.item() / ntokens_sum.item(),
+   223→        'per_source_losses': per_source_losses.tolist(),
+   224→        'per_source_n_tokens': per_source_n_tokens_sum.tolist(),
+   225→    }
+   226→    if moe_loss_sum is not None:
+   227→        aggregated_outputs['moe_loss'] = moe_loss_sum
+   228→    return AggregatedOutputs(
+   229→        loss_sum=loss_sum.item() / ntokens_sum.item() / math.log(2),
+   230→        num_batches=num_batches.item(),
+   231→        num_tokens=ntokens_sum.item(),
+   232→        aggregated_outputs=aggregated_outputs,
+   233→    )
+   234→
+   235→
+   236→class MockDataset:
+   237→    pass
+   238→
+   239→
+   240→class Sampler:
+   241→    def __init__(self, dataset, num_replicas, rank, seed, shuffle, prefetch):
+   242→        self.dataset = dataset
+   243→        self.num_replicas = num_replicas
+   244→        self.rank = rank
+   245→        self.seed = seed
+   246→        self.shuffle = shuffle
+   247→        self.prefetch = prefetch
+   248→
+   249→
+   250→class WrapperLMLoader:
+   251→    def __init__(self, dataset, batch_size, sampler, args, device, drop_last, dp_sharded):
+   252→        self.dataset = dataset
+   253→        self.batch_size = batch_size
+   254→        self.sampler = sampler
+   255→        self.num_workers = 0
+   256→
+   257→        if dp_sharded:
+   258→            num_shards = dist.get_world_size()
+   259→            shard_id = dist.get_rank()
+   260→        else:
+   261→            num_shards = sampler.num_replicas
+   262→            shard_id = sampler.rank
+   263→
+   264→        self.loader = DataLoader(
+   265→            args=DataLoaderArgs(**args),
+   266→            seed=sampler.seed,
+   267→            shuffle=sampler.shuffle,
+   268→            # prefetch=False,
+   269→            prefetch=sampler.prefetch,
+   270→            num_shards=num_shards,
+   271→            shard_id=shard_id,
+   272→            device=device
+   273→        )
+   274→        self.drop_last = drop_last
+   275→
+   276→    def __iter__(self):
+   277→        return iter(self.loader)
+   278→
+   279→    def __next__(self):
+   280→        return next(self.loader)
+   281→
+   282→    def __len__(self):
+   283→        return 100000000
+   284→
+   285→
+   286→def main(model_args, data_args, trainer_args, args):
+   287→
+   288→    if args.run_mode == 'run':
+   289→        broadcast_strategy = args.broadcast_strategy
+   290→    else:
+   291→        broadcast_strategy = 'none'
+   292→
+   293→    # need to call this to setup the logger, like formatting, although the level will be reset later
+   294→    set_default_logger_level('INFO')
+   295→    # if trainer_args.gc_freq > 0:
+   296→    #     gc.disable()
+   297→    #     gc.collect(1)
+   298→
+   299→    dataset = MockDataset()
+   300→
+   301→    ## Config Trainer ##
+   302→
+   303→    if args.run_mode == 'compile':
+   304→        if args.runtime_ngpus is None:
+   305→            raise ValueError('runtime_ngpus must be specified in compile mode')
+   306→        runtime_ngpus = args.runtime_ngpus
+   307→    elif args.run_mode == 'run':
+   308→        if trainer_args.dist_shared_file_path is not None:
+   309→            # Define a unique path on your SHARED file system
+   310→            #    CRITICAL: This path must be visible and writable by ALL nodes.
+   311→            #    Tip: Use a unique ID (like SLURM_JOB_ID) to prevent collisions between jobs.
+   312→            if "VOLCANO_JOB_NAME" in os.environ:
+   313→                shared_file_path = os.path.join(trainer_args.dist_shared_file_path, os.environ["VOLCANO_JOB_NAME"])
+   314→            elif "AMLT_EXPERIMENT_NAME" in os.environ and "AMLT_JOB_NAME" in os.environ:
+   315→                shared_file_path = os.path.join(trainer_args.dist_shared_file_path, f"{os.environ['AMLT_EXPERIMENT_NAME']}_{os.environ['AMLT_JOB_NAME']}")
+   316→            else:
+   317→                shared_file_path = trainer_args.dist_shared_file_path
+   318→            setup_distributed(shared_file_path)
+   319→
+   320→        assert 'WORLD_SIZE' in os.environ, 'WORLD_SIZE environment variable is not set'
+   321→        world_size = int(os.getenv('WORLD_SIZE'))
+   322→        if args.runtime_ngpus is None:
+   323→            runtime_ngpus = world_size
+   324→        else:
+   325→            if args.runtime_ngpus != world_size:
+   326→                raise ValueError('runtime_ngpus must match the number of GPUs in run mode')
+   327→            runtime_ngpus = args.runtime_ngpus
+   328→    if runtime_ngpus % args.plan_ngpus != 0:
+   329→        raise ValueError('runtime_ngpus must be a multiple of plan_ngpus')
+   330→
+   331→    # Compute zero_ngroups from zero_group_size
+   332→    # runtime_ngpus = zero_ngroups * zero_group_size
+   333→    if args.zero_group_size is None:
+   334→        zero_group_size = runtime_ngpus
+   335→    else:
+   336→        zero_group_size = args.zero_group_size
+   337→
+   338→    if runtime_ngpus % zero_group_size != 0:
+   339→        raise ValueError(f'runtime_ngpus ({runtime_ngpus}) must be divisible by zero_group_size ({zero_group_size})')
+   340→
+   341→    zero_ngroups = runtime_ngpus // zero_group_size
+   342→
+   343→    register_serialization_runner(SplitSerializationRunner)
+   344→    register_serialization_runner(Norm2SplitSerializationRunner)
+   345→
+   346→    compute_config = ComputeConfig(
+   347→        plan_ngpus=args.plan_ngpus,
+   348→        runtime_ngpus=runtime_ngpus,
+   349→        constant_folding=True,
+   350→        use_zero=True,
+   351→        use_end2end=True,
+   352→        zero_ngroups=zero_ngroups,
+   353→        use_async_reducer=args.use_async_reducer,
+   354→        reducer_bucket_cap_mb=args.reducer_bucket_cap_mb if args.use_async_reducer else None,
+   355→        reducer_pre_divisor=args.reducer_pre_divisor,
+   356→        accumulate_allreduce_grads_in_fp32=args.accumulate_allreduce_grads_in_fp32,
+   357→        pas_config={
+   358→            'mem_constraint': args.gpu_mem_constraint,
+   359→            'pipeline_pivots': args.pipeline_pivots,
+   360→            'pipeline_nstages': args.pipeline_nstages,
+   361→            'recompute_modules': args.recompute_modules,
+   362→            'recompute_ratio': args.recompute_ratio,
+   363→            're_profile': args.re_profile,
+   364→            'parallel_profile': not args.disable_parallel_profile,
+   365→            'partition_constraints_path': args.partition_constraints_path,
+   366→            'disable_shared_param_constraint': args.disable_shared_param_constraint,
+   367→            'profile_dir': args.profile_dir,
+   368→        },
+   369→        trace_strategy=args.trace_strategy,
+   370→    )
+   371→
+   372→    def dummy_sample_gen_fn(trainer_args):
+   373→        seqlen = model_args.max_seq_len
+   374→        bsz = model_args.batch_size
+   375→        if model_args.dp_sharded:
+   376→            bsz = bsz * args.plan_ngpus
+   377→        input_ids = torch.randint(0, 1000, (seqlen * bsz + 1,))
+   378→        tokens = input_ids[:-1].clone()
+   379→        targets = input_ids[1:].clone()
+   380→        positions = torch.cat([torch.arange(0, seqlen) for _ in range(bsz)])
+   381→        seqlens = [i * seqlen for i in range(bsz + 1)]
+   382→        context = {
+   383→            'positions': positions,
+   384→            'cu_seqlens_q': torch.tensor(seqlens, dtype=torch.int32),
+   385→            'cu_seqlens_k': torch.tensor(seqlens, dtype=torch.int32),
+   386→            'max_seqlen_q': seqlen,
+   387→            'max_seqlen_k': seqlen,
+   388→        }
+   389→        dummy_forward_args = {
+   390→            'tokens': tokens,
+   391→            'context': context,
+   392→            'targets': targets,
+   393→            # note if loss_mask here is a float tensor, nnscaler will have problems when generating
+   394→            # call to the executor
+   395→            'loss_mask': torch.ones_like(tokens),
+   396→            'loss_index': torch.zeros_like(tokens),
+   397→            'tag_index': torch.zeros_like(tokens),
+   398→            'dataset_length': 1,
+   399→            'tag_length': 1,
+   400→        }
+   401→        return dummy_forward_args
+   402→
+   403→    def backbone_forward_args_gen_fn(trainer_args):
+   404→        return {'samples': dummy_sample_gen_fn(trainer_args)}
+   405→
+   406→    backbone_config = ModuleParallelizeConfig(
+   407→        type=BackBone,
+   408→        forward_args_gen_fn=backbone_forward_args_gen_fn,
+   409→    )
+   410→    model_config = ModelConfig(
+   411→        type=WrapperModel,
+   412→        args={
+   413→            'model_args': asdict(model_args),
+   414→            'xentropy_chunk_size': args.xentropy_chunk_size,
+   415→            'xentropy_recompute': args.xentropy_recompute,
+   416→            'precision': args.precision,
+   417→        },
+   418→        parallel_modules=[backbone_config,],
+   419→    )
+   420→
+   421→    # optimizer hyperparameters are from YaRN
+   422→    # optimizer_config = OptimizerConfig(
+   423→    #     type=torch.optim.AdamW if args.precision == 'fp32' else MixedPrecisionAdamW,
+   424→    #     args={'lr': trainer_args.learning_rate, 'betas': (trainer_args.beta1, trainer_args.beta2), 'weight_decay': trainer_args.weight_decay, 'fused': True, 'eps': 1e-8},
+   425→    #     clip_gnorm=trainer_args.clip_grad_norm,
+   426→    #     loss_reduction='sum',
+   427→    #     grad_reduction='per-token-mean',
+   428→    #     aggregate_outputs_fn=aggregate_outputs_fn,
+   429→    # )
+   430→
+   431→    def param_clss_fn(param_name):
+   432→        if 'tok_embedding' in param_name:
+   433→            return 0, 0
+   434→        else:
+   435→            return 1, 0
+   436→
+   437→    main_opt_args = {'lr': trainer_args.learning_rate, 'betas': (trainer_args.beta1, trainer_args.beta2), 'weight_decay': trainer_args.weight_decay, 'fused': True, 'eps': trainer_args.adam_eps}
+   438→    embed_opt_args = dict(main_opt_args)
+   439→    embed_opt_args['weight_decay'] = 0.0
+   440→    sub_opt_type = torch.optim.AdamW if args.precision == 'fp32' else MixedPrecisionAdamW
+   441→
+   442→    optimizer_config = OptimizerConfig(
+   443→        type=nnscaler.HybridOptimizer,
+   444→        args={
+   445→            'config': {
+   446→                'optimizers': [
+   447→                    {
+   448→                        'type': sub_opt_type,
+   449→                        'options': embed_opt_args,
+   450→                    },
+   451→                    {
+   452→                        'type': sub_opt_type,
+   453→                        'options': main_opt_args,
+   454→                    }
+   455→                ]
+   456→            }
+   457→        },
+   458→        param_clss_fn=param_clss_fn,
+   459→        clip_gnorm=trainer_args.clip_grad_norm,
+   460→        loss_reduction='sum',
+   461→        grad_reduction='per-token-mean',
+   462→        aggregate_outputs_fn=aggregate_outputs_fn,
+   463→    )
+   464→
+   465→    lrscheduler_config = LRSchedulerConfig(
+   466→        type=WarmupCosineAnnealingLR,
+   467→        args={
+   468→            'warmup_steps': trainer_args.warmup_iters,
+   469→            'T_max': trainer_args.max_updates,
+   470→            'eta_min': trainer_args.min_lr,
+   471→        },
+   472→        interval='step',
+   473→    )
+   474→
+   475→    dataset_config = DatasetConfig(
+   476→        type=(lambda split: dataset),
+   477→        train_args={'split': 'train'},
+   478→    )
+   479→
+   480→    sampler_config = DatasetSamplerConfig(
+   481→        type=Sampler,
+   482→        train_args={
+   483→            'shuffle': True,
+   484→            'seed': data_args.seed,
+   485→            'prefetch': True,
+   486→        },
+   487→    )
+   488→
+   489→    dataloader_config = DataloaderConfig(
+   490→        type=WrapperLMLoader,
+   491→        train_args={
+   492→            'args': asdict(data_args),
+   493→            'device': 'cuda',
+   494→            'drop_last': True,
+   495→            'dp_sharded': model_args.dp_sharded,
+   496→        },
+   497→    )
+   498→    if (args.resume_path is None) and args.async_save_ckpt:
+   499→        from pathlib import Path
+   500→        import glob
+   501→        model_save_dir = Path(args.save_path or './checkpoints')
+   502→        checkpoint_dirs = glob.glob(os.path.join(model_save_dir, '*-*'))
+   503→        last_ckpt_dir = None
+   504→        last_epoch, last_step = -1, -1
+   505→        for ckpt_dir in checkpoint_dirs:
+   506→            basename = os.path.basename(ckpt_dir)
+   507→            try:
+   508→                epoch_str, step_str = basename.split('-')
+   509→                epoch_id = int(epoch_str.replace('epoch', ''))
+   510→                step_id = int(step_str.replace('step', ''))
+   511→                if (epoch_id > last_epoch) or (epoch_id == last_epoch and step_id > last_step):
+   512→                    last_epoch, last_step = epoch_id, step_id
+   513→                    last_ckpt_dir = ckpt_dir
+   514→            except Exception as e:
+   515→                print(f'Unexpected checkpoint dir name {basename} that does not match pattern epoch-*-step-*, skipping. Error: {e}')
+   516→                continue
+   517→        if last_ckpt_dir is not None:
+   518→            _logger.info(f'Found latest checkpoint dir {last_ckpt_dir} for async resume')
+   519→            args.resume_path = last_ckpt_dir
+   520→
+   521→    resume_from = ResumeOptions(
+   522→        checkpoint=args.resume_path or 'last',
+   523→        with_merged=args.with_merged,
+   524→    )
+   525→    serializer = SerializerOptions(
+   526→        name=args.checkpoint_serializer,
+   527→        args={} if not args.async_save_ckpt else {"async_save": args.async_save_ckpt},
+   528→    )
+   529→    checkpoint_config = CheckpointConfig(
+   530→        every_n_train_steps=trainer_args.save_interval,
+   531→        save_type='deduped',
+   532→        resume_from=resume_from,
+   533→        serializer=serializer,
+   534→        save_dir=(args.save_path or './checkpoints'),
+   535→        format=args.checkpoint_format,
+   536→        no_save=args.no_save,
+   537→        save_last=False if args.async_save_ckpt else True,
+   538→        save_best=False if args.async_save_ckpt else True,
+   539→    )
+   540→
+   541→    if args.wandb_project is not None:
+   542→        import time
+   543→        unique_id = f"{args.wandb_entity}-{args.wandb_project}-{os.environ.get('WANDB_NAME', args.name)}-{int(time.time())}"
+   544→        log_config = LogConfig(
+   545→            type=WandbLogger,
+   546→            args={
+   547→                'name': os.environ.get('WANDB_NAME', args.name),
+   548→                'project': args.wandb_project,
+   549→                'entity': args.wandb_entity,
+   550→                'id': unique_id,
+   551→                'dir': f'{args.save_path}/runs' if args.save_path else './runs',
+   552→            },
+   553→        )
+   554→    else:
+   555→        log_config = LogConfig(
+   556→            type=TensorBoardLogger,
+   557→            args={
+   558→                'name': args.name,
+   559→                'root_dir': f'{args.save_path}/runs' if args.save_path else './runs',
+   560→            },
+   561→        )
+   562→
+   563→    def after_setup_hook(trainer):
+   564→        if trainer_args.checkpoint_dir != '/tmp/checkpoints':
+   565→            _logger.info(f"Loading model from {trainer_args.checkpoint_dir}")
+   566→
+   567→            model_path = os.path.join(trainer_args.checkpoint_dir, "model_state_rank_0.pth")
+   568→            model_state = torch.load(model_path, map_location='cpu')
+   569→            # TODO(yizhu1): refine here
+   570→            # add `model.` to the keys in model_state, since we wrapped the model in WrapperModel
+   571→            model_state = {f'model.{k}': v for k, v in model_state.items()}
+   572→            _logger.info(f"Loaded model state from {model_path}")
+   573→
+   574→            if not trainer_args.reset_optimizer:
+   575→                training_state_path = os.path.join(trainer_args.checkpoint_dir, "training_state_rank_0.pth")
+   576→                training_state = torch.load(training_state_path, map_location='cpu')
+   577→                _logger.info(f"Loaded training state from {training_state_path}")
+   578→            else:
+   579→                training_state = None
+   580→
+   581→            if trainer_args.reset_lr and training_state is not None:
+   582→                assert len(training_state['param_groups']) == len(trainer.optimizer.param_groups)
+   583→                _logger.info(f"Resetting learning rate for {len(training_state['param_groups'])} parameter groups")
+   584→                for ckpt_group, new_group in zip(training_state['param_groups'], trainer.optimizer.param_groups):
+   585→                    ckpt_group['lr'] = new_group['lr']
+   586→                    ckpt_group['initial_lr'] = new_group['initial_lr']
+   587→
+   588→            nnscaler.load_merged_state_dict(trainer.model, model_state, trainer.optimizer, training_state)
+   589→            if not trainer_args.reset_dataloader:
+   590→                data_state_path = os.path.join(trainer_args.checkpoint_dir, f"data_state_rank_{torch.distributed.get_rank()}.pth")
+   591→                data_state = torch.load(data_state_path, map_location='cpu')
+   592→                _logger.info(f"Loaded data state from {data_state_path}")
+   593→                trainer.dataloader['train'].loader.setstate(data_state)
+   594→        else:
+   595→            _logger.info("No pretrain resume path provided.")
+   596→
+   597→        if trainer.model.moe_loss is not None:
+   598→            trainer.model.moe_loss.set_sync_group(trainer.sync_group)
+   599→
+   600→        param_count = sum(p.numel() for p in trainer.model.parameters())
+   601→        _logger.info(f'# of model parameters in nnscaler model at current rank: {param_count / 1e6:.2f}M')
+   602→
+   603→    def on_load_checkpoint_hook(trainer: Trainer, state_dict):
+   604→        if not trainer_args.reset_dataloader:
+   605→            data_state = state_dict['data_state']
+   606→            if args.with_merged:
+   607→                msg = """ Resume dataloader states from merged checkpoint. Note this operation may fail or produce unexpected
+   608→                          training results if the distributed plan is changed after resuming. For example, the number of
+   609→                          plan_ngpus and runtime_ngpus are changed, or the number of data parallel groups is changed. If you
+   610→                          encounter this problem, please consider 1) set `reset_dataloader` to True in train_args, or 2) use
+   611→                          hooks `on_load_checkpoint` and `after_load_checkpoint` to adjust the dataloader's behavior."""
+   612→                _logger.warning(msg)
+   613→                # in merged ckpt, data_state is a list of states for all ranks
+   614→                # here we load the state for the current rank
+   615→                assert len(data_state) == dist.get_world_size(), f'Expected data_state length {dist.get_world_size()}, but got {len(data_state)}'
+   616→                data_state = data_state[trainer.rank]
+   617→            trainer.dataloader['train'].loader.setstate(data_state)
+   618→
+   619→        if trainer_args.reset_lr:
+   620→            if 'train_status' in state_dict:
+   621→                state_dict['train_status']['finished_train_steps'] = 0
+   622→            state_dict.pop('lr_scheduler', None)
+   623→            optimizer_state = state_dict['optimizer']
+   624→            real_param_groups = optimizer_state['param_groups'][0]['children']
+   625→            assert len(real_param_groups) == len(trainer.optimizer.param_groups)
+   626→            _logger.info(f"Resetting learning rate for {len(optimizer_state['param_groups'])} parameter groups from nnscaler ckpt files")
+   627→            _logger.info(f"Before reset: {real_param_groups}")
+   628→            for idx, new_group in enumerate(trainer.optimizer.param_groups):
+   629→                real_param_groups[idx][0]['lr'] = new_group['lr']
+   630→                real_param_groups[idx][0]['initial_lr'] = new_group['initial_lr']
+   631→            _logger.info(f"After reset: {real_param_groups}")
+   632→
+   633→        if trainer_args.reset_step:
+   634→            if 'train_status' in state_dict:
+   635→                state_dict['train_status']['finished_train_steps'] = 0
+   636→            if 'lr_scheduler' in state_dict:
+   637→                lr_scheduler_state = state_dict['lr_scheduler']
+   638→                if 'last_epoch' in lr_scheduler_state:
+   639→                    lr_scheduler_state['last_epoch'] = -1
+   640→
+   641→        if args.bf16_from_fp32:
+   642→            assert args.precision == 'bf16', f'Expected bf16 precision, but got {args.precision}.'
+   643→            assert args.with_merged, 'bf16_from_fp32 is only supported when with_merged is True.'
+   644→            model_state_dict = state_dict['model']
+   645→            opt = state_dict['optimizer']
+   646→            assert 'state' in opt and len(opt['state']) > 0
+   647→            module = trainer.model
+   648→            assert not module.use_scheduler, f'currently assumes pipeline parallelism is not applied'
+   649→            idx = 0
+   650→            orig_names = module._orign_module_metadata.origin_param_names
+   651→            for name, param in model_state_dict.items():
+   652→                if name not in orig_names:
+   653→                    continue
+   654→                opt['state'][idx]['fp32_params'] = param
+   655→                idx += 1
+   656→            assert idx == len(opt['state']), f'optimizer state length {len(opt["state"])} does not match model param length {idx}'
+   657→        
+   658→        # reset_lr or reset_step may change the training step, so we set the trainer's step to the value in ckpt after processing lr and step reset
+   659→        trainer.resume_from_step = state_dict['train_status']['finished_train_steps']
+   660→
+   661→        gc.collect()
+   662→        torch.cuda.empty_cache()
+   663→
+   664→    def after_load_checkpoint_hook(trainer, state_dict):
+   665→        # always set dataloader_resumed flag to true, since we have handled in the load hook above
+   666→        trainer.dataloader_resumed = True
+   667→
+   668→        gc.collect()
+   669→        torch.cuda.empty_cache()
+   670→
+   671→    def save_dataloader_state_hook(trainer, state_dict):
+   672→        data_state = trainer.dataloader['train'].loader.getstate()
+   673→        state_dict['data_state'] = data_state
+   674→
+   675→    flops = None
+   676→    cur_model_args = ModelArgs(**asdict(model_args))
+   677→    def on_train_step_start_hook(trainer, batches):
+   678→        nonlocal flops
+   679→        assert flops is None, f"flops should be None, but got {flops}"
+   680→        cur_flops = 0
+   681→        for batch in batches:
+   682→            cu_seqlens_q = batch['context']['cu_seqlens_q']
+   683→            seqlens = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
+   684→            # iterate over all seqlens
+   685→            for seqlen in seqlens:
+   686→                cur_flops += estimate_flops(seqlen.item(), cur_model_args)
+   687→        if model_args.dp_sharded:
+   688→            sync_group = dist.group.WORLD
+   689→        else:
+   690→            sync_group = trainer.sync_group
+   691→        group_size = torch.distributed.get_world_size(sync_group)
+   692→        flops = [None for _ in range(group_size)]
+   693→        torch.distributed.all_gather_object(flops, cur_flops / 1e3, group=sync_group)
+   694→
+   695→        keys = ['tokens', 'targets', 'loss_mask', 'loss_index', 'tag_index']
+   696→        start_group = dist.get_rank() // args.plan_ngpus * args.plan_ngpus
+   697→        allgather_group = DeviceGroup().get_group(list(range(start_group, start_group + args.plan_ngpus)))
+   698→        def allgather_func(sub_content):
+   699→            assert sub_content.dim() == 1, f'only support 1D tensor, but got {sub_content.shape}'
+   700→            full_size = sub_content.size(0) * args.plan_ngpus
+   701→            full_content = torch.empty(full_size, dtype=sub_content.dtype, device=sub_content.device)
+   702→            torch.distributed.all_gather_into_tensor(full_content, sub_content, group=allgather_group)
+   703→            return full_content
+   704→
+   705→        if model_args.dp_sharded:
+   706→            for i in range(len(batches)):
+   707→                batch = batches[i]
+   708→                for key in keys:
+   709→                    if key not in batch:
+   710→                        continue
+   711→                    sub_content = batch[key]
+   712→                    batches[i][key] = allgather_func(sub_content)
+   713→                sub_position = batch['context']['positions']
+   714→                batches[i]['context']['positions'] = allgather_func(sub_position)
+   715→        elif args.plan_ngpus > 1 and args.check_dataloader_consistency:
+   716→            def checker(sub_content):
+   717→                full_content = allgather_func(sub_content)
+   718→                full_content = full_content.reshape(args.plan_ngpus, -1)
+   719→                for i in range(1, args.plan_ngpus):
+   720→                    if not torch.equal(full_content[0], full_content[i]):
+   721→                        return False
+   722→                return True
+   723→
+   724→            for i in range(len(batches)):
+   725→                batch = batches[i]
+   726→                for key in keys:
+   727→                    if key not in batch:
+   728→                        continue
+   729→                    if not checker(batch[key]):
+   730→                        raise RuntimeError(f'Dataloader inconsistency detected in key {key} at rank {dist.get_rank()}')
+   731→
+   732→        if trainer.model.moe_loss is not None:
+   733→            trainer.model.moe_loss.clear_buffer()
+   734→
+   735→        z_loss_start_step = trainer.model.model_args['z_loss_start_step']
+   736→        z_loss_warmup_step = trainer.model.model_args['z_loss_warmup_step']
+   737→        z_loss_target = trainer.model.model_args['z_loss_scale']
+   738→        current_step = trainer.train_status.finished_train_steps
+   739→        if current_step < z_loss_start_step:
+   740→            trainer.model.z_loss_scale = 0.0
+   741→        elif current_step < z_loss_start_step + z_loss_warmup_step:
+   742→            if current_step - z_loss_start_step == 1:
+   743→                print(f"Start z_loss warmup at step {current_step}")
+   744→            elif current_step - z_loss_start_step + 1 == z_loss_warmup_step:
+   745→                print(f"End z_loss warmup at step {current_step}")
+   746→            # Linear warmup from 0 to z_loss_target
+   747→            warmup_progress = (current_step - z_loss_start_step) / z_loss_warmup_step
+   748→            trainer.model.z_loss_scale = z_loss_target * warmup_progress
+   749→        else:
+   750→            trainer.model.z_loss_scale = z_loss_target
+   751→
+   752→        skip_diagnostic = (trainer_args.diagnostic_interval == -1) or (trainer.train_status.finished_train_steps == 0) or ((trainer.train_status.finished_train_steps + 1) % trainer_args.diagnostic_interval != 0)
+   753→        nnscaler_funcs.set_skip_diagnostic(skip_diagnostic)
+   754→
+   755→    def on_train_step_end_hook(trainer, losses):
+   756→        if trainer.model.moe_loss is not None:
+   757→            dense_layers = model_args.dense_layers
+   758→            yoco_self_layers = model_args.n_layers - model_args.yoco_cross_layers
+   759→            universal_loops = model_args.universal_loop
+   760→            expect_moe_layers = universal_loops * (yoco_self_layers - dense_layers) + model_args.yoco_cross_layers
+   761→            scale_size = args.runtime_ngpus // args.plan_ngpus
+   762→            expert_max_info = dict()
+   763→            expert_min_info = dict()
+   764→            expert_activated_info = dict()
+   765→            buffer = trainer.model.moe_loss.tokens_per_expert_buffer
+   766→            assert expect_moe_layers == buffer.size(0), \
+   767→                f"buffer size {buffer.size(0)} does not match expected size {expect_moe_layers}"
+   768→            for i in range(buffer.size(0)):
+   769→                local_buffer = buffer[i].sum(dim=0)
+   770→                if i < universal_loops * (yoco_self_layers - dense_layers):
+   771→                    key = f'universal_loop_{i // (yoco_self_layers - dense_layers)}_self_layer_{i % (yoco_self_layers - dense_layers) + dense_layers}'
+   772→                else:
+   773→                    key = f'yoco_cross_layer_{i - universal_loops * (yoco_self_layers - dense_layers)}'
+   774→                expert_max_info[f'{key}'] = local_buffer.max().item() * scale_size
+   775→                expert_min_info[f'{key}'] = local_buffer.min().item() * scale_size
+   776→                expert_activated_info[f'{key}'] = local_buffer.count_nonzero().item()
+   777→            trainer.log_metrics(expert_max_info, tag='expert_max_info')
+   778→            trainer.log_metrics(expert_min_info, tag='expert_min_info')
+   779→            trainer.log_metrics(expert_activated_info, tag='expert_activated_info')
+   780→            trainer.model.moe_loss.clear_buffer()
+   781→        if trainer_args.gc_freq > 0:
+   782→            _resume_from_step = getattr(trainer, 'resume_from_step', 0)
+   783→            if trainer.train_status.finished_train_steps == _resume_from_step + 20:
+   784→                print(f"Disable GC at step {trainer.train_status.finished_train_steps}")
+   785→                gc.disable()
+   786→                gc.collect()
+   787→                torch.cuda.empty_cache()
+   788→            if trainer.train_status.finished_train_steps % trainer_args.gc_freq == 0:
+   789→                if psutil.virtual_memory().percent > 80:
+   790→                    print(f"Trigger full GC at step {trainer.train_status.finished_train_steps} due to high memory usage {psutil.virtual_memory().percent}%")
+   791→                    gc.collect()
+   792→                else:
+   793→                    gc.collect(1)
+   794→        if trainer_args.heartbeat_interval > 0 and trainer.train_status.finished_train_steps % trainer_args.heartbeat_interval == 0 and dist.get_rank() == 0:
+   795→            """Send heartbeat to monitoring service."""
+   796→            def send_heartbeat(heartbeat_step):
+   797→                try:
+   798→                    if "VOLCANO_JOB_NAME" in os.environ:
+   799→                        _job_name = os.environ["VOLCANO_JOB_NAME"]
+   800→                    elif "AMLT_EXPERIMENT_NAME" in os.environ and "AMLT_JOB_NAME" in os.environ:
+   801→                        _job_name = f"{os.environ['AMLT_EXPERIMENT_NAME']}_{os.environ['AMLT_JOB_NAME']}"
+   802→                    elif "WANDB_NAME" in os.environ:
+   803→                        _job_name = os.environ["WANDB_NAME"]
+   804→                    else:
+   805→                        _job_name = "unknown_job"
+   806→                    response = requests.post(trainer_args.heartbeat_url, json={
+   807→                        "run_id": _job_name,
+   808→                        "timeout_seconds": trainer_args.heartbeat_timeout,
+   809→                        "step": heartbeat_step
+   810→                    })
+   811→                    response.raise_for_status()
+   812→                except Exception as e:
+   813→                    print(f"Failed to send heartbeat: {e} -- {_job_name} at step {heartbeat_step} / {trainer_args.heartbeat_timeout} seconds")
+   814→
+   815→            threading.Thread(target=send_heartbeat, args=(trainer.train_status.finished_train_steps,), daemon=True).start()
+   816→
+   817→    def before_log_metrics_hook(trainer, step_metrics, aggregated_outputs):
+   818→        step_metrics['bsz'] = aggregated_outputs.num_tokens
+   819→        step_metrics['throughput'] = aggregated_outputs.num_tokens / step_metrics['train_wall']
+   820→        step_metrics['z_loss'] = aggregated_outputs.aggregated_outputs['z_loss']
+   821→        if 'moe_loss' in aggregated_outputs.aggregated_outputs:
+   822→            step_metrics['moe_loss'] = aggregated_outputs.aggregated_outputs['moe_loss']
+   823→        nonlocal flops
+   824→        step_metrics['min_flops'] = min(flops)
+   825→        step_metrics['max_flops'] = max(flops)
+   826→        step_metrics['FLOPS'] = sum(flops) / step_metrics['train_wall'] / args.runtime_ngpus
+   827→        flops = None
+   828→        detail = dict()
+   829→        for i, name in enumerate(trainer.dataloader['train'].loader.dataset_name):
+   830→            n_tokens = aggregated_outputs.aggregated_outputs['per_source_n_tokens'][i]
+   831→            if n_tokens > 0:    # avoid logging zero loss to beautify the wandb graphs
+   832→                detail[f'{name}_loss'] = aggregated_outputs.aggregated_outputs['per_source_losses'][i]
+   833→            detail[f'{name}_n_tokens'] = n_tokens
+   834→        trainer.log_metrics(detail, tag='detail')
+   835→
+   836→        if trainer.diagnostic_stats:
+   837→            if 'block_out' in trainer.diagnostic_stats:
+   838→                trainer.log_metrics(trainer.diagnostic_stats['block_out'], tag='block_out')
+   839→
+   840→    def init_env_fn(trainer):
+   841→        # by default, rank 0's level is INFO, others are WARNING
+   842→        # reset the logger level after initializing the distributed env for all ranks
+   843→        if args.logger_level != 'INFO':
+   844→            logging.getLogger('nnscaler').setLevel(args.logger_level)
+   845→        print(f'# of model parameters: {estimate_total_params(cur_model_args) / 1e6:.2f}M')
+   846→        if cur_model_args.moe:
+   847→            activated_params = estimate_activated_params_moe(cur_model_args)
+   848→            print(f'# of activated model parameters (MoE): {activated_params / 1e6:.2f}M')
+   849→
+   850→    def before_sync_grad(trainer):
+   851→        detected_nan = False
+   852→        for name, param in trainer.model.named_parameters():
+   853→            if param.grad is not None:
+   854→                if torch.isnan(param.grad).any():
+   855→                    detected_nan = True
+   856→                    _logger.warning(f'NaN detected in grad of {name} at {trainer.rank}')
+   857→        torch.distributed.barrier()
+   858→        if detected_nan:
+   859→            raise RuntimeError('NaN detected in grad before sync')
+   860→
+   861→        # manually trigger gc at the start of training to avoid OOM
+   862→        _resume_from_step = getattr(trainer, 'resume_from_step', 0)
+   863→        if trainer.train_status.finished_train_steps <= _resume_from_step + 5:
+   864→            gc.collect()
+   865→            torch.cuda.empty_cache()
+   866→
+   867→    def after_aggregate_train_step_outputs(trainer, aggregated_outputs, loss):
+   868→        trainer.aggregated_outputs = aggregated_outputs
+   869→
+   870→    def after_sync_grad(trainer):
+   871→        detected_nan = False
+   872→        for name, param in trainer.model.named_parameters():
+   873→            if param.grad is not None:
+   874→                if torch.isnan(param.grad).any():
+   875→                    detected_nan = True
+   876→                    _logger.warning(f'NaN detected in grad of {name} at {trainer.rank} after sync')
+   877→        torch.distributed.barrier()
+   878→        if detected_nan:
+   879→            raise RuntimeError('NaN detected in grad after sync')
+   880→
+   881→        if nnscaler_funcs.get_skip_diagnostic():
+   882→            trainer.diagnostic_stats = None
+   883→            return
+   884→        else:
+   885→            trainer.diagnostic_stats = {}
+   886→
+   887→        def weight_stats(param: torch.nn.Parameter, grad: torch.Tensor):
+   888→            with torch.no_grad():
+   889→                return {
+   890→                    'w_rms': torch.linalg.vector_norm(param.data.float()).item() / math.sqrt(param.data.numel()),
+   891→                    'w_abs_max': torch.max(torch.abs(param.data.float())).item(),
+   892→                    'g_rms': torch.linalg.vector_norm(grad.float()).item() / math.sqrt(grad.data.numel()) / trainer.aggregated_outputs.num_tokens,
+   893→                }
+   894→
+   895→        stats = dict()
+   896→        fullmap = trainer.model.backbone.fullmap
+   897→        for name, param in trainer.model.backbone.named_parameters():
+   898→            assert name in fullmap, f'{name} not in fullmap'
+   899→            attr_meta = fullmap[name]
+   900→            if 'mlp.w' in attr_meta.orig_name:
+   901→                # handle expert weights separately
+   902→                expert_start = attr_meta.slicers[0].start
+   903→                expert_end = attr_meta.slicers[0].stop
+   904→                for expert_idx in range(expert_start, expert_end):
+   905→                    slicers = ((expert_idx, expert_idx + 1),) + tuple((s.start, s.stop) if isinstance(s, slice) else s for s in attr_meta.slicers[1:])
+   906→                    key = (attr_meta.orig_name, slicers, attr_meta.dtype)
+   907→                    expert_param = param[expert_idx - expert_start]
+   908→                    expert_grad = param.grad[expert_idx - expert_start]
+   909→                    stats[key] = weight_stats(expert_param, expert_grad)
+   910→            else:
+   911→                slicers_hashable = tuple((s.start, s.stop) if isinstance(s, slice) else s for s in attr_meta.slicers)
+   912→                key = (attr_meta.orig_name, slicers_hashable, attr_meta.dtype)
+   913→                stats[key] = weight_stats(param, param.grad)
+   914→        global_stats = [None for _ in range(dist.get_world_size())]
+   915→        dist.all_gather_object(global_stats, stats)
+   916→
+   917→        inner_stats = nnscaler_funcs.get_and_clear_diagnostic_stats()
+   918→        global_inner_stats = [None for _ in range(dist.get_world_size())]
+   919→        dist.all_gather_object(global_inner_stats, inner_stats)
+   920→
+   921→        if dist.get_rank() != 0:
+   922→            return
+   923→
+   924→        aggregated_stats = dict()
+   925→        for rank, curr_stats in enumerate(global_stats):
+   926→            for key, stat in curr_stats.items():
+   927→                if key not in aggregated_stats:
+   928→                    aggregated_stats[key] = stat
+   929→                # if key in aggregated_stats:
+   930→                #     if aggregated_stats[key] != stat:
+   931→                #         raise RuntimeError(f'stat from rank {rank} for {key} does not match, got {stat}, expected {aggregated_stats[key]}')
+   932→                # else:
+   933→                #     aggregated_stats[key] = stat
+   934→
+   935→        for key, stat in aggregated_stats.items():
+   936→            name, slicers, dtype = key
+   937→            _logger.info(f'Diagnostic stats for param {name}, slicers {slicers}, dtype {dtype}: {stat}')
+   938→
+   939→        # for rank, curr_stats in enumerate(global_inner_stats):
+   940→        # if model_args.moe:
+   941→            # for key in ['moe_routing', 'block_out']:
+   942→        for key in ['block_out',]:
+   943→            trainer.diagnostic_stats[key] = dict()
+   944→            assert key in global_inner_stats[0], f'key {key} not in inner stats'
+   945→            content = global_inner_stats[0][key]
+   946→            assert len(content) % args.update_freq == 0, f'activation stats length {len(content)} is not divisible by update_freq {args.update_freq}'
+   947→            layer_num = len(content) // args.update_freq
+   948→            for idx, layer_stats in enumerate(content):
+   949→                if idx // layer_num > 0:
+   950→                    break
+   951→                _logger.info(f'Activation stats, layer {idx % layer_num}: {layer_stats}')
+   952→                if key == 'block_out':
+   953→                    for name_stat, v in layer_stats.items():
+   954→                        trainer.diagnostic_stats[key][f'{name_stat}.{idx % layer_num}'] = v
+   955→
+   956→    def before_gnorm_clip_hook(trainer):
+   957→        if trainer_args.warmup_clip_grad_norm is None:
+   958→            return
+   959→        finished_steps = trainer.train_status.finished_train_steps
+   960→        if finished_steps >= trainer_args.warmup_iters * 2 / 3:
+   961→            trainer.train_args.optimizer.clip_gnorm = trainer_args.clip_grad_norm
+   962→        else:
+   963→            trainer.train_args.optimizer.clip_gnorm = trainer_args.warmup_clip_grad_norm
+   964→
+   965→    def autodist_wrapper(graph, cfg):
+   966→        for node in graph.select(ntype=IRFwOperation):
+   967→            if ('out = h + r' in node.comment or 'out = h + r.float()' in node.comment) and node.fn == torch.add:
+   968→                node.post_hook = nnscaler_funcs.block_out_printer
+   969→            if 'nnscaler_all2all_moe_gmm' in node.signature or 'nnscaler_fused_moe_ffn' in node.signature:
+   970→                node.pre_hook = nnscaler_funcs.moe_timer_start
+   971→                node.post_hook = nnscaler_funcs.moe_timer_end
+   972→
+   973→        return pas_autodist(graph, cfg)
+   974→
+   975→    nnscaler_trainer_args = TrainerArgs(
+   976→        instance_name=args.name,
+   977→        gen_savedir=args.gen_savedir,
+   978→        run_mode=args.run_mode,
+   979→        compute_config=compute_config,
+   980→        pas_policy=autodist_wrapper,
+   981→        model=model_config,
+   982→        optimizer=optimizer_config,
+   983→        dataset=dataset_config,
+   984→        dataloader=dataloader_config,
+   985→        checkpoint=checkpoint_config,
+   986→        # if precision is not fp32, user should handle casting by themselves
+   987→        precision='none' if args.precision != 'fp32' else 'fp32',
+   988→        max_epochs=2,
+   989→        grad_accumulation_steps=args.update_freq,
+   990→        max_train_steps=trainer_args.max_updates,
+   991→        lr_scheduler=lrscheduler_config,
+   992→        log=[log_config],
+   993→        seed=0,
+   994→        gen_reuse=args.gen_reuse,
+   995→        broadcast_strategy=broadcast_strategy,
+   996→        dataset_sampler=sampler_config,
+   997→        dummy_sample_gen_fn=dummy_sample_gen_fn,
+   998→        init_env_fn=init_env_fn,
+   999→        hook=dict(
+  1000→            after_setup=after_setup_hook,
+  1001→            on_train_step_start=on_train_step_start_hook,
+  1002→            on_train_step_end=on_train_step_end_hook,
+  1003→            on_save_checkpoint=save_dataloader_state_hook,
+  1004→            on_load_checkpoint=on_load_checkpoint_hook,
+  1005→            after_load_checkpoint=after_load_checkpoint_hook,
+  1006→            before_log_train_metrics=before_log_metrics_hook,
+  1007→            after_aggregate_train_step_outputs=after_aggregate_train_step_outputs,
+  1008→            before_sync_grad=before_sync_grad,
+  1009→            after_sync_grad=after_sync_grad,
+  1010→            before_gnorm_clip=before_gnorm_clip_hook,
+  1011→        ),
+  1012→    )
+  1013→
+  1014→    trainer = Trainer(train_args=nnscaler_trainer_args)
+  1015→    trainer.run()
+  1016→
+  1017→
+  1018→if __name__ == '__main__':
+  1019→    model_args, data_args, trainer_args, args = config.parse_nnscaler_args()
+  1020→
+  1021→    if args.pipeline_nstages != 'auto':
+  1022→        args.pipeline_nstages = int(args.pipeline_nstages)
+  1023→        if args.pipeline_nstages > 1 and not args.pipeline_pivots:
+  1024→            raise ValueError('pipeline_pivots must be specified when pipeline is enabled')
+  1025→
+  1026→    if os.getenv('DETERMINISTIC'):  # reduce randomness for integration test
+  1027→        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+  1028→        torch.use_deterministic_algorithms(True)
+  1029→
+  1030→    main(model_args, data_args, trainer_args, args)
+  1031→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

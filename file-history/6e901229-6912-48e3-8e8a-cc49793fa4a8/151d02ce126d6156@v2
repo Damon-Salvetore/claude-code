@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------
+# run_all_12.sh — 串行跑全部 12 个实验（4 模型 × 3 模式）
+#
+# 每个模型跑 3 种模式：baseline → nvfp4 → nvfp4_full
+# 自动跳过已完成的实验（检测日志中 wandb synced 标记）
+#
+# 用法：
+#   nohup bash scripts/nvfp4_experiment/run_all_12.sh > logs/run_all_12.log 2>&1 &
+# ---------------------------------------------------------------
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOG_DIR="${PROJECT_DIR}/logs"
+
+mkdir -p "$LOG_DIR"
+
+# 实验列表：每个模型依次跑 baseline、nvfp4（FFN only）、nvfp4_full（FFN+QKVO）
+MODELS=("Base-0.4B" "GatedAttn-0.4B" "DiffAttn-0.4B" "GatedDiffAttn-0.4B")
+MODES=("baseline" "nvfp4" "nvfp4_full")
+
+TOTAL=$((${#MODELS[@]} * ${#MODES[@]}))
+COUNT=0
+FAILED=0
+SKIPPED=0
+
+echo "============================================="
+echo "  NVFP4 Full Experiment Runner (12 runs)"
+echo "  Start time: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  Total experiments: ${TOTAL}"
+echo "============================================="
+echo ""
+
+for model in "${MODELS[@]}"; do
+    for mode in "${MODES[@]}"; do
+        COUNT=$((COUNT + 1))
+        run_name="${model}-${mode}"
+        log_file="${LOG_DIR}/${run_name}.log"
+
+        echo "============================================="
+        echo "  [${COUNT}/${TOTAL}] ${run_name}"
+        echo "  $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "============================================="
+
+        # Check if this experiment already completed (wandb synced = done)
+        if [[ -f "$log_file" ]] && grep -q "Synced.*W&B file" "$log_file" 2>/dev/null; then
+            echo "  SKIP: Already completed (wandb synced found in log)"
+            SKIPPED=$((SKIPPED + 1))
+            echo ""
+            continue
+        fi
+
+        echo "  Starting..."
+        bash "${SCRIPT_DIR}/run_single.sh" "$model" "$mode" && exit_code=0 || exit_code=$?
+
+        if [[ $exit_code -ne 0 ]]; then
+            echo "  FAILED with exit code ${exit_code}"
+            FAILED=$((FAILED + 1))
+        else
+            echo "  COMPLETED successfully"
+        fi
+        echo ""
+    done
+done
+
+echo "============================================="
+echo "  All experiments finished!"
+echo "  End time: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  Total: ${TOTAL}, Skipped: ${SKIPPED}, Failed: ${FAILED}"
+echo "============================================="

@@ -1,0 +1,512 @@
+"""Verification tests for NVFP4 FFN integration.
+
+Tests:
+  1. nvfp4_fake_quant basic correctness (value table mapping, known inputs)
+  2. STE gradient pass-through
+  3. FFN forward with nvfp4_mode=0 (baseline, unchanged behavior)
+  4. FFN forward with nvfp4_mode=1 (quantized path)
+  5. Alignment with Model-Optimizer algorithm logic
+  6. Edge cases: zeros, very small values, very large values
+  7. Block size constraint validation
+  8. config.py nvfp4_mode field
+  9. model.py nvfp4_mode pass-through to FFN
+
+Run:
+  cd /home/yingbohao/llm-train && python -m pytest tests/test_nvfp4_ffn.py -v
+  or:
+  cd /home/yingbohao/llm-train && python tests/test_nvfp4_ffn.py
+"""
+
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'llm'))
+
+import torch
+import torch.nn as nn
+import math
+
+# =====================================================
+# Test 1: nvfp4_fake_quant basic value mapping
+# =====================================================
+def test_fp4_value_mapping():
+    """Verify that known input values map to correct FP4 E2M1 quantization levels."""
+    from kernel.nvfp4_quant import _nvfp4_fake_quant_impl, _get_fp4_tables, NVFP4_BLOCK_SIZE
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    fp4_values, fp4_bounds = _get_fp4_tables(device)
+
+    # Create a block of 16 elements where amax = 6.0, so scale = 6.0 / 6.0 = 1.0
+    # This means abs_scaled == abs(x), direct mapping to FP4 values
+    x = torch.tensor([
+        0.0, 0.1, 0.3, 0.5,   # → 0.0, 0.0, 0.5, 0.5
+        0.8, 1.0, 1.3, 1.5,   # → 1.0, 1.0, 1.5, 1.5
+        1.8, 2.0, 2.6, 3.0,   # → 2.0, 2.0, 3.0, 3.0
+        3.6, 4.0, 5.1, 6.0,   # → 4.0, 4.0, 6.0, 6.0
+    ], dtype=torch.float32, device=device)
+
+    result = _nvfp4_fake_quant_impl(x, fp4_values, fp4_bounds)
+
+    expected = torch.tensor([
+        0.0, 0.0, 0.5, 0.5,
+        1.0, 1.0, 1.5, 1.5,
+        2.0, 2.0, 3.0, 3.0,
+        4.0, 4.0, 6.0, 6.0,
+    ], dtype=torch.float32, device=device)
+
+    assert torch.allclose(result, expected, atol=1e-6), \
+        f"FP4 value mapping failed.\nGot: {result}\nExpected: {expected}"
+    print("  PASS: FP4 E2M1 value mapping correct (scale=1.0)")
+
+
+# =====================================================
+# Test 2: nvfp4_fake_quant with scaling
+# =====================================================
+def test_fp4_with_scaling():
+    """Verify that per-block scaling works correctly."""
+    from kernel.nvfp4_quant import _nvfp4_fake_quant_impl, _get_fp4_tables, NVFP4_BLOCK_SIZE
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    fp4_values, fp4_bounds = _get_fp4_tables(device)
+
+    # Block of 16 elements, amax = 12.0, scale = 12.0 / 6.0 = 2.0
+    # abs_scaled = |x| / 2.0
+    # e.g. x=12.0 → abs_scaled=6.0 → fp4=6.0 → result=6.0*2.0=12.0
+    # e.g. x=6.0  → abs_scaled=3.0 → fp4=3.0 → result=3.0*2.0=6.0
+    # e.g. x=1.0  → abs_scaled=0.5 → fp4=0.5 → result=0.5*2.0=1.0
+    x = torch.zeros(16, dtype=torch.float32, device=device)
+    x[0] = 12.0   # abs_scaled=6.0 → 6.0, result=12.0
+    x[1] = 6.0    # abs_scaled=3.0 → 3.0, result=6.0
+    x[2] = 4.0    # abs_scaled=2.0 → 2.0, result=4.0
+    x[3] = 1.0    # abs_scaled=0.5 → 0.5, result=1.0
+    x[4] = -12.0  # abs_scaled=6.0 → 6.0, result=-12.0
+    x[5] = -3.0   # abs_scaled=1.5 → 1.5, result=-3.0
+
+    result = _nvfp4_fake_quant_impl(x, fp4_values, fp4_bounds)
+
+    assert abs(result[0].item() - 12.0) < 1e-5, f"x=12.0 should map to 12.0, got {result[0].item()}"
+    assert abs(result[1].item() - 6.0) < 1e-5, f"x=6.0 should map to 6.0, got {result[1].item()}"
+    assert abs(result[2].item() - 4.0) < 1e-5, f"x=4.0 should map to 4.0, got {result[2].item()}"
+    assert abs(result[3].item() - 1.0) < 1e-5, f"x=1.0 should map to 1.0, got {result[3].item()}"
+    assert abs(result[4].item() - (-12.0)) < 1e-5, f"x=-12.0 should map to -12.0, got {result[4].item()}"
+    assert abs(result[5].item() - (-3.0)) < 1e-5, f"x=-3.0 should map to -3.0, got {result[5].item()}"
+    print("  PASS: Per-block scaling works correctly")
+
+
+# =====================================================
+# Test 3: Negative values and sign preservation
+# =====================================================
+def test_sign_preservation():
+    """Verify that negative values are quantized correctly with sign preserved."""
+    from kernel.nvfp4_quant import nvfp4_fake_quant
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # amax=6.0, scale=1.0 → direct mapping
+    x = torch.tensor([
+        -6.0, -4.0, -3.0, -2.0, -1.5, -1.0, -0.5, 0.0,
+        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+    ], dtype=torch.float32, device=device)
+
+    result = nvfp4_fake_quant(x)
+
+    expected = torch.tensor([
+        -6.0, -4.0, -3.0, -2.0, -1.5, -1.0, -0.5, 0.0,
+        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+    ], dtype=torch.float32, device=device)
+
+    assert torch.allclose(result, expected, atol=1e-6), \
+        f"Sign preservation failed.\nGot: {result}\nExpected: {expected}"
+    print("  PASS: Negative values and sign preservation correct")
+
+
+# =====================================================
+# Test 4: STE gradient pass-through
+# =====================================================
+def test_ste_gradient():
+    """Verify that gradients pass through unchanged (pure STE)."""
+    from kernel.nvfp4_quant import nvfp4_fake_quant
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    x = torch.randn(32, dtype=torch.float32, device=device, requires_grad=True)
+    y = nvfp4_fake_quant(x)
+    grad_out = torch.randn_like(y)
+    y.backward(grad_out)
+
+    # Pure STE: grad_input == grad_output exactly
+    assert torch.allclose(x.grad, grad_out, atol=1e-7), \
+        f"STE gradient mismatch.\nGot: {x.grad}\nExpected: {grad_out}"
+    print("  PASS: STE gradient pass-through verified")
+
+
+# =====================================================
+# Test 5: Multiple blocks
+# =====================================================
+def test_multiple_blocks():
+    """Verify that quantization works correctly across multiple blocks."""
+    from kernel.nvfp4_quant import nvfp4_fake_quant
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # 4 blocks × 16 = 64 elements
+    x = torch.randn(64, dtype=torch.float32, device=device)
+    result = nvfp4_fake_quant(x)
+
+    # Result should have same shape and dtype
+    assert result.shape == x.shape, f"Shape mismatch: {result.shape} vs {x.shape}"
+    assert result.dtype == x.dtype, f"Dtype mismatch: {result.dtype} vs {x.dtype}"
+
+    # Result should be different from input (quantization noise)
+    # but not too far (quantization error should be bounded)
+    diff = (result - x).abs()
+    assert diff.max() < x.abs().max(), "Quantization error exceeds input magnitude"
+    print("  PASS: Multiple blocks quantization correct")
+
+
+# =====================================================
+# Test 6: 2D and higher-dimensional tensors
+# =====================================================
+def test_multidim_tensors():
+    """Verify that quantization works on 2D+ tensors (reshaped correctly)."""
+    from kernel.nvfp4_quant import nvfp4_fake_quant
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # [batch=4, seq=8, hidden=32] → total 1024 elements, divisible by 16
+    x = torch.randn(4, 8, 32, dtype=torch.float32, device=device)
+    result = nvfp4_fake_quant(x)
+
+    assert result.shape == x.shape, f"Shape mismatch: {result.shape} vs {x.shape}"
+    print("  PASS: Multi-dimensional tensor quantization correct")
+
+
+# =====================================================
+# Test 7: bfloat16 input/output dtype preservation
+# =====================================================
+def test_bf16_dtype():
+    """Verify that bf16 inputs produce bf16 outputs."""
+    from kernel.nvfp4_quant import nvfp4_fake_quant
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    x = torch.randn(32, dtype=torch.bfloat16, device=device)
+    result = nvfp4_fake_quant(x)
+
+    assert result.dtype == torch.bfloat16, f"Expected bf16 output, got {result.dtype}"
+    print("  PASS: bf16 dtype preservation correct")
+
+
+# =====================================================
+# Test 8: Edge case — all zeros
+# =====================================================
+def test_all_zeros():
+    """Verify that all-zero input produces all-zero output."""
+    from kernel.nvfp4_quant import nvfp4_fake_quant
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    x = torch.zeros(16, dtype=torch.float32, device=device)
+    result = nvfp4_fake_quant(x)
+
+    assert torch.allclose(result, x, atol=1e-7), \
+        f"All-zero input should produce all-zero output.\nGot: {result}"
+    print("  PASS: All-zero edge case correct")
+
+
+# =====================================================
+# Test 9: Edge case — very small values
+# =====================================================
+def test_very_small_values():
+    """Verify that very small values are handled (clamped scale avoids div-by-zero)."""
+    from kernel.nvfp4_quant import nvfp4_fake_quant
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    x = torch.full((16,), 1e-15, dtype=torch.float32, device=device)
+    result = nvfp4_fake_quant(x)
+
+    # Should not produce NaN or Inf
+    assert not torch.isnan(result).any(), "NaN in result for very small values"
+    assert not torch.isinf(result).any(), "Inf in result for very small values"
+    print("  PASS: Very small values handled without NaN/Inf")
+
+
+# =====================================================
+# Test 10: ModelArgs nvfp4_mode field
+# =====================================================
+def test_config_nvfp4_mode():
+    """Verify that ModelArgs has nvfp4_mode field with default 0."""
+    from arch.config import ModelArgs
+
+    args = ModelArgs()
+    assert hasattr(args, 'nvfp4_mode'), "ModelArgs should have nvfp4_mode field"
+    assert args.nvfp4_mode == 0, f"Default nvfp4_mode should be 0, got {args.nvfp4_mode}"
+
+    args_q = ModelArgs(nvfp4_mode=1)
+    assert args_q.nvfp4_mode == 1, f"nvfp4_mode should be settable to 1, got {args_q.nvfp4_mode}"
+    print("  PASS: ModelArgs nvfp4_mode field correct")
+
+
+# =====================================================
+# Test 11: FFN forward — baseline path (nvfp4_mode=0)
+# =====================================================
+def test_ffn_baseline():
+    """Verify that FFN with nvfp4_mode=0 produces same result as original code."""
+    from arch.ffn import FeedForwardNetwork
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    torch.manual_seed(42)
+
+    embed_dim = 64
+    ffn_dim = 192
+
+    ffn = FeedForwardNetwork(embed_dim, ffn_dim, nvfp4_mode=0).to(device)
+    x = torch.randn(4, 16, embed_dim, dtype=torch.bfloat16, device=device)
+
+    result = ffn(x)
+    assert result.shape == (4, 16, embed_dim), f"Unexpected shape: {result.shape}"
+    assert not torch.isnan(result).any(), "NaN in baseline FFN output"
+    print("  PASS: FFN baseline path (nvfp4_mode=0) correct")
+
+
+# =====================================================
+# Test 12: FFN forward — quantized path (nvfp4_mode=1)
+# =====================================================
+def test_ffn_nvfp4():
+    """Verify that FFN with nvfp4_mode=1 produces valid output with quantization noise."""
+    from arch.ffn import FeedForwardNetwork
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    torch.manual_seed(42)
+
+    embed_dim = 64
+    ffn_dim = 192
+
+    ffn_q = FeedForwardNetwork(embed_dim, ffn_dim, nvfp4_mode=1).to(device)
+    x = torch.randn(4, 16, embed_dim, dtype=torch.bfloat16, device=device)
+
+    result_q = ffn_q(x)
+    assert result_q.shape == (4, 16, embed_dim), f"Unexpected shape: {result_q.shape}"
+    assert not torch.isnan(result_q).any(), "NaN in NVFP4 FFN output"
+    assert not torch.isinf(result_q).any(), "Inf in NVFP4 FFN output"
+    print("  PASS: FFN NVFP4 path (nvfp4_mode=1) produces valid output")
+
+
+# =====================================================
+# Test 13: FFN quantized vs baseline — different outputs
+# =====================================================
+def test_ffn_quant_vs_baseline():
+    """Verify that NVFP4 quantization introduces measurable quantization noise."""
+    from arch.ffn import FeedForwardNetwork
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    torch.manual_seed(42)
+
+    embed_dim = 64
+    ffn_dim = 192
+
+    # Create two FFNs with same weights
+    ffn_base = FeedForwardNetwork(embed_dim, ffn_dim, nvfp4_mode=0).to(device)
+    ffn_q = FeedForwardNetwork(embed_dim, ffn_dim, nvfp4_mode=1).to(device)
+    # Copy weights so only quantization differs
+    ffn_q.load_state_dict(ffn_base.state_dict())
+
+    x = torch.randn(4, 16, embed_dim, dtype=torch.bfloat16, device=device)
+
+    result_base = ffn_base(x)
+    result_q = ffn_q(x)
+
+    # Outputs should be different (quantization noise) but not wildly different
+    diff = (result_q.float() - result_base.float()).abs()
+    assert diff.max() > 0, "NVFP4 should introduce some quantization noise"
+    # Relative error should be bounded (rough check: < 50% of output magnitude)
+    rel_err = diff.mean() / (result_base.float().abs().mean() + 1e-8)
+    assert rel_err < 0.5, f"Quantization error too large: relative error = {rel_err.item():.4f}"
+    print(f"  PASS: NVFP4 introduces quantization noise (rel_err={rel_err.item():.4f})")
+
+
+# =====================================================
+# Test 14: FFN backward — gradients flow correctly
+# =====================================================
+def test_ffn_nvfp4_backward():
+    """Verify that gradients flow through NVFP4 FFN correctly."""
+    from arch.ffn import FeedForwardNetwork
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    torch.manual_seed(42)
+
+    embed_dim = 64
+    ffn_dim = 192
+
+    ffn_q = FeedForwardNetwork(embed_dim, ffn_dim, nvfp4_mode=1).to(device)
+    x = torch.randn(4, 16, embed_dim, dtype=torch.bfloat16, device=device, requires_grad=True)
+
+    result = ffn_q(x)
+    loss = result.float().sum()
+    loss.backward()
+
+    # Check that all parameters received gradients
+    for name, param in ffn_q.named_parameters():
+        assert param.grad is not None, f"No gradient for {name}"
+        assert not torch.isnan(param.grad).any(), f"NaN gradient for {name}"
+        assert not torch.isinf(param.grad).any(), f"Inf gradient for {name}"
+
+    # Input gradient should also exist
+    assert x.grad is not None, "No gradient for input"
+    assert not torch.isnan(x.grad).any(), "NaN in input gradient"
+    print("  PASS: FFN NVFP4 backward gradients flow correctly")
+
+
+# =====================================================
+# Test 15: Quantization error is bounded per the algorithm
+# =====================================================
+def test_quantization_error_bound():
+    """Verify that quantization error is bounded by theoretical max.
+
+    For NVFP4 with per-block scale, the max rounding error per element is:
+    scale * max_boundary_gap / 2, where max_boundary_gap is between consecutive FP4 values.
+    The largest gap is between 4.0 and 6.0 (gap=2.0), so max rounding error = scale * 1.0.
+    """
+    from kernel.nvfp4_quant import nvfp4_fake_quant, NVFP4_BLOCK_SIZE
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    torch.manual_seed(123)
+    x = torch.randn(1024, dtype=torch.float32, device=device) * 10.0  # varied magnitudes
+
+    result = nvfp4_fake_quant(x)
+    error = (result - x).abs()
+
+    # Per-block scale = amax / 6.0, max per-element error ≤ scale * 1.0 (half of max gap 2.0)
+    x_blocks = x.reshape(-1, NVFP4_BLOCK_SIZE)
+    amax = x_blocks.abs().amax(dim=-1, keepdim=True)
+    scale = amax / 6.0
+    max_error_per_block = scale.expand_as(x_blocks).reshape(-1)
+
+    # Allow for floating point imprecision
+    violations = (error > max_error_per_block * 1.01).sum()
+    assert violations == 0, \
+        f"Quantization error exceeds theoretical bound at {violations} positions"
+    print("  PASS: Quantization error within theoretical bounds")
+
+
+# =====================================================
+# Test 16: Alignment with Model-Optimizer algorithm
+# =====================================================
+def test_alignment_with_model_optimizer():
+    """Verify our implementation matches Model-Optimizer's FP4 E2M1 algorithm.
+
+    Model-Optimizer algorithm:
+      1. Reshape to [num_blocks, block_size=16]
+      2. amax = max(|block|)
+      3. scale = amax / 6.0
+      4. abs_scaled = |x| / scale
+      5. q_val = nearest_fp4(abs_scaled) using boundary table
+      6. result = sign(x) * q_val * scale
+    """
+    from kernel.nvfp4_quant import nvfp4_fake_quant, _FP4_VALUES, _FP4_BOUNDS, NVFP4_BLOCK_SIZE
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    torch.manual_seed(456)
+
+    x = torch.randn(64, dtype=torch.float32, device=device) * 5.0
+
+    # Our implementation
+    our_result = nvfp4_fake_quant(x)
+
+    # Manual reference implementation (mimicking Model-Optimizer logic)
+    fp4_values = torch.tensor(_FP4_VALUES, dtype=torch.float32, device=device)
+    fp4_bounds = torch.tensor(_FP4_BOUNDS, dtype=torch.float32, device=device)
+
+    x_2d = x.reshape(-1, NVFP4_BLOCK_SIZE).float()
+    amax = x_2d.abs().amax(dim=-1, keepdim=True)
+    scale = (amax / 6.0).clamp(min=1e-12)
+    abs_scaled = x_2d.abs() / scale
+    indices = torch.searchsorted(fp4_bounds, abs_scaled)
+    q_val = fp4_values[indices]
+    ref_result = (x_2d.sign() * q_val * scale).reshape(x.shape)
+
+    assert torch.allclose(our_result, ref_result, atol=1e-6), \
+        f"Implementation doesn't match Model-Optimizer algorithm.\n" \
+        f"Max diff: {(our_result - ref_result).abs().max().item()}"
+    print("  PASS: Implementation aligned with Model-Optimizer FP4 E2M1 algorithm")
+
+
+# =====================================================
+# Test 17: Block.__init__ passes nvfp4_mode to FFN
+# =====================================================
+def test_model_passes_nvfp4_mode():
+    """Verify that Block passes nvfp4_mode to FFN layer."""
+    from arch.config import ModelArgs
+
+    # Test with nvfp4_mode=0 (default)
+    args_0 = ModelArgs(
+        d_model=64, d_ffn=192, head=4, kv_head=2,
+        n_layers=2, vocab_size=1024, nvfp4_mode=0,
+    )
+    from arch.model import Block
+    block_0 = Block(0, args_0)
+    assert block_0.mlp.nvfp4_mode == 0, f"Expected nvfp4_mode=0, got {block_0.mlp.nvfp4_mode}"
+
+    # Test with nvfp4_mode=1
+    args_1 = ModelArgs(
+        d_model=64, d_ffn=192, head=4, kv_head=2,
+        n_layers=2, vocab_size=1024, nvfp4_mode=1,
+    )
+    block_1 = Block(0, args_1)
+    assert block_1.mlp.nvfp4_mode == 1, f"Expected nvfp4_mode=1, got {block_1.mlp.nvfp4_mode}"
+    print("  PASS: Block passes nvfp4_mode to FeedForwardNetwork correctly")
+
+
+# =====================================================
+# Main: Run all tests
+# =====================================================
+if __name__ == '__main__':
+    print("=" * 60)
+    print("NVFP4 FFN Integration Verification Tests")
+    print("=" * 60)
+
+    tests = [
+        ("Test  1: FP4 E2M1 value mapping", test_fp4_value_mapping),
+        ("Test  2: Per-block scaling", test_fp4_with_scaling),
+        ("Test  3: Negative values & sign preservation", test_sign_preservation),
+        ("Test  4: STE gradient pass-through", test_ste_gradient),
+        ("Test  5: Multiple blocks", test_multiple_blocks),
+        ("Test  6: Multi-dimensional tensors", test_multidim_tensors),
+        ("Test  7: bf16 dtype preservation", test_bf16_dtype),
+        ("Test  8: All-zeros edge case", test_all_zeros),
+        ("Test  9: Very small values edge case", test_very_small_values),
+        ("Test 10: ModelArgs nvfp4_mode field", test_config_nvfp4_mode),
+        ("Test 11: FFN baseline path (nvfp4_mode=0)", test_ffn_baseline),
+        ("Test 12: FFN NVFP4 path (nvfp4_mode=1)", test_ffn_nvfp4),
+        ("Test 13: NVFP4 vs baseline different outputs", test_ffn_quant_vs_baseline),
+        ("Test 14: FFN NVFP4 backward gradients", test_ffn_nvfp4_backward),
+        ("Test 15: Quantization error bound", test_quantization_error_bound),
+        ("Test 16: Alignment with Model-Optimizer", test_alignment_with_model_optimizer),
+        ("Test 17: Block passes nvfp4_mode to FFN", test_model_passes_nvfp4_mode),
+    ]
+
+    passed = 0
+    failed = 0
+    errors = []
+
+    for name, test_fn in tests:
+        try:
+            print(f"\n{name}:")
+            test_fn()
+            passed += 1
+        except Exception as e:
+            failed += 1
+            errors.append((name, str(e)))
+            print(f"  FAIL: {e}")
+
+    print("\n" + "=" * 60)
+    print(f"Results: {passed} passed, {failed} failed out of {len(tests)} tests")
+    if errors:
+        print("\nFailed tests:")
+        for name, err in errors:
+            print(f"  - {name}: {err}")
+    print("=" * 60)
+
+    if failed > 0:
+        sys.exit(1)

@@ -1,0 +1,54 @@
+   720→                    if not torch.equal(full_content[0], full_content[i]):
+   721→                        return False
+   722→                return True
+   723→
+   724→            for i in range(len(batches)):
+   725→                batch = batches[i]
+   726→                for key in keys:
+   727→                    if key not in batch:
+   728→                        continue
+   729→                    if not checker(batch[key]):
+   730→                        raise RuntimeError(f'Dataloader inconsistency detected in key {key} at rank {dist.get_rank()}')
+   731→
+   732→        if trainer.model.moe_loss is not None:
+   733→            trainer.model.moe_loss.clear_buffer()
+   734→
+   735→        z_loss_start_step = trainer.model.model_args['z_loss_start_step']
+   736→        z_loss_warmup_step = trainer.model.model_args['z_loss_warmup_step']
+   737→        z_loss_target = trainer.model.model_args['z_loss_scale']
+   738→        current_step = trainer.train_status.finished_train_steps
+   739→        if current_step < z_loss_start_step:
+   740→            trainer.model.z_loss_scale = 0.0
+   741→        elif current_step < z_loss_start_step + z_loss_warmup_step:
+   742→            if current_step - z_loss_start_step == 1:
+   743→                print(f"Start z_loss warmup at step {current_step}")
+   744→            elif current_step - z_loss_start_step + 1 == z_loss_warmup_step:
+   745→                print(f"End z_loss warmup at step {current_step}")
+   746→            # Linear warmup from 0 to z_loss_target
+   747→            warmup_progress = (current_step - z_loss_start_step) / z_loss_warmup_step
+   748→            trainer.model.z_loss_scale = z_loss_target * warmup_progress
+   749→        else:
+   750→            trainer.model.z_loss_scale = z_loss_target
+   751→
+   752→        skip_diagnostic = (trainer_args.diagnostic_interval == -1) or (trainer.train_status.finished_train_steps == 0) or ((trainer.train_status.finished_train_steps + 1) % trainer_args.diagnostic_interval != 0)
+   753→        nnscaler_funcs.set_skip_diagnostic(skip_diagnostic)
+   754→
+   755→    def on_train_step_end_hook(trainer, losses):
+   756→        if trainer.model.moe_loss is not None:
+   757→            dense_layers = model_args.dense_layers
+   758→            yoco_self_layers = model_args.n_layers - model_args.yoco_cross_layers
+   759→            universal_loops = model_args.universal_loop
+   760→            expect_moe_layers = universal_loops * (yoco_self_layers - dense_layers) + model_args.yoco_cross_layers
+   761→            scale_size = args.runtime_ngpus // args.plan_ngpus
+   762→            expert_max_info = dict()
+   763→            expert_min_info = dict()
+   764→            expert_activated_info = dict()
+   765→            buffer = trainer.model.moe_loss.tokens_per_expert_buffer
+   766→            assert expect_moe_layers == buffer.size(0), \
+   767→                f"buffer size {buffer.size(0)} does not match expected size {expect_moe_layers}"
+   768→            for i in range(buffer.size(0)):
+   769→                local_buffer = buffer[i].sum(dim=0)
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

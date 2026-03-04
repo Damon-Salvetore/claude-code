@@ -1,0 +1,204 @@
+   350→        use_zero=True,
+   351→        use_end2end=True,
+   352→        zero_ngroups=zero_ngroups,
+   353→        use_async_reducer=args.use_async_reducer,
+   354→        reducer_bucket_cap_mb=args.reducer_bucket_cap_mb if args.use_async_reducer else None,
+   355→        reducer_pre_divisor=args.reducer_pre_divisor,
+   356→        accumulate_allreduce_grads_in_fp32=args.accumulate_allreduce_grads_in_fp32,
+   357→        pas_config={
+   358→            'mem_constraint': args.gpu_mem_constraint,
+   359→            'pipeline_pivots': args.pipeline_pivots,
+   360→            'pipeline_nstages': args.pipeline_nstages,
+   361→            'recompute_modules': args.recompute_modules,
+   362→            'recompute_ratio': args.recompute_ratio,
+   363→            're_profile': args.re_profile,
+   364→            'parallel_profile': not args.disable_parallel_profile,
+   365→            'partition_constraints_path': args.partition_constraints_path,
+   366→            'disable_shared_param_constraint': args.disable_shared_param_constraint,
+   367→            'profile_dir': args.profile_dir,
+   368→        },
+   369→        trace_strategy=args.trace_strategy,
+   370→    )
+   371→
+   372→    def dummy_sample_gen_fn(trainer_args):
+   373→        seqlen = model_args.max_seq_len
+   374→        bsz = model_args.batch_size
+   375→        if model_args.dp_sharded:
+   376→            bsz = bsz * args.plan_ngpus
+   377→        input_ids = torch.randint(0, 1000, (seqlen * bsz + 1,))
+   378→        tokens = input_ids[:-1].clone()
+   379→        targets = input_ids[1:].clone()
+   380→        positions = torch.cat([torch.arange(0, seqlen) for _ in range(bsz)])
+   381→        seqlens = [i * seqlen for i in range(bsz + 1)]
+   382→        context = {
+   383→            'positions': positions,
+   384→            'cu_seqlens_q': torch.tensor(seqlens, dtype=torch.int32),
+   385→            'cu_seqlens_k': torch.tensor(seqlens, dtype=torch.int32),
+   386→            'max_seqlen_q': seqlen,
+   387→            'max_seqlen_k': seqlen,
+   388→        }
+   389→        dummy_forward_args = {
+   390→            'tokens': tokens,
+   391→            'context': context,
+   392→            'targets': targets,
+   393→            # note if loss_mask here is a float tensor, nnscaler will have problems when generating
+   394→            # call to the executor
+   395→            'loss_mask': torch.ones_like(tokens),
+   396→            'loss_index': torch.zeros_like(tokens),
+   397→            'tag_index': torch.zeros_like(tokens),
+   398→            'dataset_length': 1,
+   399→            'tag_length': 1,
+   400→        }
+   401→        return dummy_forward_args
+   402→
+   403→    def backbone_forward_args_gen_fn(trainer_args):
+   404→        return {'samples': dummy_sample_gen_fn(trainer_args)}
+   405→
+   406→    backbone_config = ModuleParallelizeConfig(
+   407→        type=BackBone,
+   408→        forward_args_gen_fn=backbone_forward_args_gen_fn,
+   409→    )
+   410→    model_config = ModelConfig(
+   411→        type=WrapperModel,
+   412→        args={
+   413→            'model_args': asdict(model_args),
+   414→            'xentropy_chunk_size': args.xentropy_chunk_size,
+   415→            'xentropy_recompute': args.xentropy_recompute,
+   416→            'precision': args.precision,
+   417→        },
+   418→        parallel_modules=[backbone_config,],
+   419→    )
+   420→
+   421→    # optimizer hyperparameters are from YaRN
+   422→    # optimizer_config = OptimizerConfig(
+   423→    #     type=torch.optim.AdamW if args.precision == 'fp32' else MixedPrecisionAdamW,
+   424→    #     args={'lr': trainer_args.learning_rate, 'betas': (trainer_args.beta1, trainer_args.beta2), 'weight_decay': trainer_args.weight_decay, 'fused': True, 'eps': 1e-8},
+   425→    #     clip_gnorm=trainer_args.clip_grad_norm,
+   426→    #     loss_reduction='sum',
+   427→    #     grad_reduction='per-token-mean',
+   428→    #     aggregate_outputs_fn=aggregate_outputs_fn,
+   429→    # )
+   430→
+   431→    def param_clss_fn(param_name):
+   432→        if 'tok_embedding' in param_name:
+   433→            return 0, 0
+   434→        else:
+   435→            return 1, 0
+   436→
+   437→    main_opt_args = {'lr': trainer_args.learning_rate, 'betas': (trainer_args.beta1, trainer_args.beta2), 'weight_decay': trainer_args.weight_decay, 'fused': True, 'eps': trainer_args.adam_eps}
+   438→    embed_opt_args = dict(main_opt_args)
+   439→    embed_opt_args['weight_decay'] = 0.0
+   440→    sub_opt_type = torch.optim.AdamW if args.precision == 'fp32' else MixedPrecisionAdamW
+   441→
+   442→    optimizer_config = OptimizerConfig(
+   443→        type=nnscaler.HybridOptimizer,
+   444→        args={
+   445→            'config': {
+   446→                'optimizers': [
+   447→                    {
+   448→                        'type': sub_opt_type,
+   449→                        'options': embed_opt_args,
+   450→                    },
+   451→                    {
+   452→                        'type': sub_opt_type,
+   453→                        'options': main_opt_args,
+   454→                    }
+   455→                ]
+   456→            }
+   457→        },
+   458→        param_clss_fn=param_clss_fn,
+   459→        clip_gnorm=trainer_args.clip_grad_norm,
+   460→        loss_reduction='sum',
+   461→        grad_reduction='per-token-mean',
+   462→        aggregate_outputs_fn=aggregate_outputs_fn,
+   463→    )
+   464→
+   465→    lrscheduler_config = LRSchedulerConfig(
+   466→        type=WarmupCosineAnnealingLR,
+   467→        args={
+   468→            'warmup_steps': trainer_args.warmup_iters,
+   469→            'T_max': trainer_args.max_updates,
+   470→            'eta_min': trainer_args.min_lr,
+   471→        },
+   472→        interval='step',
+   473→    )
+   474→
+   475→    dataset_config = DatasetConfig(
+   476→        type=(lambda split: dataset),
+   477→        train_args={'split': 'train'},
+   478→    )
+   479→
+   480→    sampler_config = DatasetSamplerConfig(
+   481→        type=Sampler,
+   482→        train_args={
+   483→            'shuffle': True,
+   484→            'seed': data_args.seed,
+   485→            'prefetch': True,
+   486→        },
+   487→    )
+   488→
+   489→    dataloader_config = DataloaderConfig(
+   490→        type=WrapperLMLoader,
+   491→        train_args={
+   492→            'args': asdict(data_args),
+   493→            'device': 'cuda',
+   494→            'drop_last': True,
+   495→            'dp_sharded': model_args.dp_sharded,
+   496→        },
+   497→    )
+   498→    if (args.resume_path is None) and args.async_save_ckpt:
+   499→        from pathlib import Path
+   500→        import glob
+   501→        model_save_dir = Path(args.save_path or './checkpoints')
+   502→        checkpoint_dirs = glob.glob(os.path.join(model_save_dir, '*-*'))
+   503→        last_ckpt_dir = None
+   504→        last_epoch, last_step = -1, -1
+   505→        for ckpt_dir in checkpoint_dirs:
+   506→            basename = os.path.basename(ckpt_dir)
+   507→            try:
+   508→                epoch_str, step_str = basename.split('-')
+   509→                epoch_id = int(epoch_str.replace('epoch', ''))
+   510→                step_id = int(step_str.replace('step', ''))
+   511→                if (epoch_id > last_epoch) or (epoch_id == last_epoch and step_id > last_step):
+   512→                    last_epoch, last_step = epoch_id, step_id
+   513→                    last_ckpt_dir = ckpt_dir
+   514→            except Exception as e:
+   515→                print(f'Unexpected checkpoint dir name {basename} that does not match pattern epoch-*-step-*, skipping. Error: {e}')
+   516→                continue
+   517→        if last_ckpt_dir is not None:
+   518→            _logger.info(f'Found latest checkpoint dir {last_ckpt_dir} for async resume')
+   519→            args.resume_path = last_ckpt_dir
+   520→
+   521→    resume_from = ResumeOptions(
+   522→        checkpoint=args.resume_path or 'last',
+   523→        with_merged=args.with_merged,
+   524→    )
+   525→    serializer = SerializerOptions(
+   526→        name=args.checkpoint_serializer,
+   527→        args={} if not args.async_save_ckpt else {"async_save": args.async_save_ckpt},
+   528→    )
+   529→    checkpoint_config = CheckpointConfig(
+   530→        every_n_train_steps=trainer_args.save_interval,
+   531→        save_type='deduped',
+   532→        resume_from=resume_from,
+   533→        serializer=serializer,
+   534→        save_dir=(args.save_path or './checkpoints'),
+   535→        format=args.checkpoint_format,
+   536→        no_save=args.no_save,
+   537→        save_last=False if args.async_save_ckpt else True,
+   538→        save_best=False if args.async_save_ckpt else True,
+   539→    )
+   540→
+   541→    if args.wandb_project is not None:
+   542→        import time
+   543→        unique_id = f"{args.wandb_entity}-{args.wandb_project}-{os.environ.get('WANDB_NAME', args.name)}-{int(time.time())}"
+   544→        log_config = LogConfig(
+   545→            type=WandbLogger,
+   546→            args={
+   547→                'name': os.environ.get('WANDB_NAME', args.name),
+   548→                'project': args.wandb_project,
+   549→                'entity': args.wandb_entity,
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,431 @@
+     1→import argparse
+     2→from dataclasses import dataclass, fields
+     3→from arch.model import ModelArgs
+     4→from data.lm_loader import DataLoaderArgs
+     5→import copy
+     6→
+     7→@dataclass
+     8→class TrainerArgs:
+     9→    seed: int = 1
+    10→    max_updates: int = 100000
+    11→    warmup_iters: int = 2000
+    12→    lr_decay_iters: int = 90000
+    13→    lr_offset: int = 0
+    14→    constant_lr: bool = False
+    15→    learning_rate: float = 3e-4
+    16→    min_lr: float = 1e-5
+    17→    beta1: float = 0.9
+    18→    beta2: float = 0.95
+    19→    adam_eps: float = 1e-8
+    20→    wd_decay_iters: int = 0
+    21→    weight_decay: float = 0.1
+    22→    checkpoint_dir: str = '/tmp/checkpoints'
+    23→    save_interval: int = 5000
+    24→    # if -1, disable diagnostic logging
+    25→    diagnostic_interval: int = -1
+    26→    # if not None, will use this clip value for 2/3 warm up steps
+    27→    warmup_clip_grad_norm: float = None
+    28→    clip_grad_norm: float = 1.0
+    29→    update_freq: int = 1
+    30→    eval_interval: int = 20000000000
+    31→    eval_limit: int = None
+    32→    eval_batch_size: int = 32
+    33→    eval_tasks: str = 'winogrande,hellaswag,arc_challenge'
+    34→    wandb_project: str = None
+    35→    wandb_entity: str = None
+    36→    zero: bool = False
+    37→    pretrained_model: str = None
+    38→    reset_dataloader: bool = False
+    39→    reset_optimizer: bool = False
+    40→    reset_step: bool = False
+    41→    reset_lr: bool = False
+    42→    # Python garbage control scheduling interval, in steps
+    43→    gc_freq: int = 50
+    44→    dist_shared_file_path: str = None
+    45→    heartbeat_url: str = 'http://agens.westus.cloudapp.azure.com:8000/heartbeat'
+    46→    # heart beat interval, in steps
+    47→    heartbeat_interval: int = -1
+    48→    # heart beat timeout, in seconds
+    49→    heartbeat_timeout: int = -1
+    50→
+    51→@dataclass
+    52→class DistributedArgs:
+    53→    backend: str = 'nccl'
+    54→    init_method: str = 'env://'
+    55→    world_size: int = 1
+    56→    rank: int = 0
+    57→    local_rank: int = 0
+    58→
+    59→
+    60→model_args = {
+    61→    "Qwen": ModelArgs(),
+    62→    "YOCO-MoE-A0.4B": ModelArgs(d_model=1024, d_ffn=3072, head=16, kv_head=4, head_dim=None, n_layers=24, qk_norm=False, weight_tying=False, yoco_cross_layers=12, yoco_window_size=512, moe=True, moe_ffn_dim=512, moe_expert_num=64, moe_top_k=8, d_shared_expert=512),
+    63→    "YOCO-0.4B": ModelArgs(d_model=1024, d_ffn=3072, head=16, cross_head=32, kv_head=4, head_dim=None, n_layers=24, qk_norm=False, weight_tying=False, yoco_cross_layers=12, yoco_window_size=512, moe=False),
+    64→    "YOCO-1.3B": ModelArgs(d_model=2048, d_ffn=6144, head=16, cross_head=32, kv_head=4, head_dim=128, n_layers=28, qk_norm=True, weight_tying=False, yoco_cross_layers=14, yoco_window_size=512, moe=False),
+    65→    "YOCO-2B": ModelArgs(d_model=2560, d_ffn=7680, head=20, cross_head=40, kv_head=4, head_dim=None, n_layers=20, qk_norm=True, weight_tying=False, yoco_cross_layers=10, yoco_window_size=512, moe=False),
+    66→    # add gated_attention=True to reload previous checkpoints
+    67→    "YOCO-3B": ModelArgs(d_model=3072, d_ffn=9216, head=24, cross_head=48, kv_head=4, head_dim=128, n_layers=20, qk_norm=True, gated_attention=True, weight_tying=False, yoco_cross_layers=10, yoco_window_size=512, moe=False),
+    68→    "YOCO-3B-U3-Wm2k": ModelArgs(d_model=3072, d_ffn=9216, head=24, cross_head=48, kv_head=4, head_dim=128, n_layers=20, qk_norm=True, gated_attention=True, weight_tying=False, yoco_cross_layers=10, yoco_window_size=512, moe=False),
+    69→    "YOCO-8B": ModelArgs(d_model=4096, d_ffn=12288, head=32, cross_head=64, kv_head=4, head_dim=128, n_layers=36, qk_norm=True, weight_tying=False, yoco_cross_layers=18, yoco_window_size=512, moe=False),
+    70→    "YOCO-MoE-A2B": ModelArgs(d_model=2560, d_ffn=7680, head=20, kv_head=4, head_dim=None, n_layers=20, qk_norm=False, weight_tying=False, yoco_cross_layers=10, yoco_window_size=512, moe=True, moe_ffn_dim=1024, moe_expert_num=64, moe_top_k=8, d_shared_expert=1024),
+    71→    "30A3B-U3-E9": ModelArgs(d_model=3072, d_ffn=9216, head=24, cross_head=48, kv_head=4, head_dim=128, n_layers=20, qk_norm=True, gated_attention=True, weight_tying=False, yoco_cross_layers=10, yoco_window_size=512, moe=True, moe_ffn_dim=1280, moe_expert_num=128, moe_top_k=8, d_shared_expert=1280),
+    72→    "YOCO-MoE-30B-A3B": ModelArgs(d_model=3072, d_ffn=9216, head=24, cross_head=48, kv_head=4, head_dim=128, n_layers=20, qk_norm=True, diff_attention=True, weight_tying=False, yoco_cross_layers=10, yoco_window_size=512, moe=True, moe_ffn_dim=1280, moe_expert_num=128, moe_top_k=8, d_shared_expert=1280),
+    73→}
+    74→
+    75→data_args = {
+    76→    "debug": DataLoaderArgs(data_path='/mnt/msranlp/lidong1/data/llm_debug/fineweb-1BT.json'),
+    77→    "nnscaler_debug": DataLoaderArgs(data_path='/workspace/code/tmp/llm_debug/debug.json'),
+    78→    "redstone-v4.23": DataLoaderArgs(data_path='/mnt/nlcredstone/shaohanh/data/redstone_v4_23_config/json/train.json'),
+    79→    "liang-p1-251219": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase1-config-6.5T-251219/train.json'),
+    80→    "liang-p1-251219-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/hangbo/phase1-config-6.5T-251219_pvc/train.json'),
+    81→    "liang-p1-260126-xxmix": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase1-config-6.5T-260126-xx-code-global-shuffle/train.json'),
+    82→    "liang-p1-260126-xxmix-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/nfs_index/phase1-config-6.5T-260126-xx-code-global-shuffle/index_files/train.json'),
+    83→    "phase1.2-config-6T-260204-more-web": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase1.2-config-6T-260204-more-web/train.json'),
+    84→    "phase1.2-config-6T-260204-more-web-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/nfs_index/phase1.2-config-6T-260204-more-web/index_files/train.json'),
+    85→    "phase2.1-config-4T-260212": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase2.1-config-4T-260212/train.json'),
+    86→    "phase2.1-config-4T-260212-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/nfs_index/phase2.1-config-4T-260212/index_files/train.json'),
+    87→    "phase2.1-config-4.5T-260214-tag-part1-of-3": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase2.1-config-4.5T-260214-add-tag-part1-of-3/train.json'),
+    88→    "phase2.1-config-4.5T-260214-tag-part1-of-3-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/nfs_index/phase2.1-config-4.5T-260214-add-tag-part1-of-3/index_files/train.json'),
+    89→    "phase2.1-config-4.5T-260214-tag-part2-of-3": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase2.1-config-4.5T-260214-add-tag-part2-of-3/train.json'),
+    90→    "phase2.1-config-4.5T-260214-tag-part2-of-3-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/nfs_index/phase2.1-config-4.5T-260214-add-tag-part2-of-3/index_files/train.json'),
+    91→    "phase2.1-config-4.5T-260214-tag-part2-of-3-mid-training": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase2.1-config-4.5T-260214-add-tag-part2-of-3-mid-training/train.json'),
+    92→    "phase2.1-config-4.5T-260214-tag-part2-of-3-mid-training-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/nfs_index/phase2.1-config-4.5T-260214-add-tag-part2-of-3-mid-training/index_files/train.json'),
+    93→    "phase2.1-config-4.5T-260214-tag-part2-of-3-mid-training-32k": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase2.1-config-4.5T-260214-add-tag-part2-of-3-mid-training-32k/train.32k.json'),
+    94→    "phase2.1-config-4.5T-260214-tag-part2-of-3-mid-training-32k-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/nfs_index/phase2.1-config-4.5T-260214-add-tag-part2-of-3-mid-training-32k/index_files/train.json'),
+    95→    "phase2.1-config-4.5T-260214-tag-part2-of-3-mid-training-256k": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase2.1-config-4.5T-260214-add-tag-part2-of-3-mid-training-long/train.256k.json', stack_file_size=4),
+    96→    "phase2.1-config-4.5T-260214-tag-part2-of-3-mid-training-256k-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/nfs_index/phase2.1-config-4.5T-260214-add-tag-part2-of-3-mid-training-256k-merged/index_files/train.json', stack_file_size=4),
+    97→    "phase2.1-config-4.5T-260214-tag-part2-of-3-mid-training-1024k": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/phase2.1-config-4.5T-260214-add-tag-part2-of-3-mid-training-long/train.1024k.json', stack_file_size=8),
+    98→    "phase2.1-config-4.5T-260214-tag-part2-of-3-mid-training-1024k-nfs": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/nfs_index/phase2.1-config-4.5T-260214-add-tag-part2-of-3-mid-training-1024k-merged/index_files/train.json', stack_file_size=8),
+    99→    "long-64k-251219": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/data/long-seq-251219/train.64k.json'),
+   100→    "long-256k-251219": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/data/long-seq-251219/train.256k.json', stack_file_size=4),
+   101→    "long-1024k-251219": DataLoaderArgs(data_path='/mnt/msranlphot/lidong1/data/long-seq-251219/train.1024k.json', stack_file_size=8),
+   102→    "exp-phase1-config-6.5T-260215-tag": DataLoaderArgs(data_path='/mnt/msranlphot/wangliang/data/experimental-phase1-config-6.5T-260215-add-tag/train.json'),
+   103→}
+   104→
+   105→training_args = {
+   106→    "warmup_constant": TrainerArgs(max_updates=1000000000, lr_decay_iters=1000000000, learning_rate=3.2e-4, 
+   107→                            min_lr=1e-5, warmup_iters=2000, beta1=0.9, beta2=0.95, adam_eps=1e-8, weight_decay=0.1,
+   108→                            clip_grad_norm=1.0, constant_lr=True),
+   109→}
+   110→
+   111→def parse_training_args():
+   112→    parser = argparse.ArgumentParser(description="training arguments")
+   113→    parser.add_argument(f"--model", type=str, choices=model_args.keys())
+   114→    parser.add_argument(f"--data", type=str, choices=data_args.keys())
+   115→    parser.add_argument(f"--hyperparams", type=str, choices=training_args.keys())
+   116→
+   117→    argument_dict = {}
+   118→
+   119→    # Add arguments for each field in the dataclass
+   120→    for config_type in [ModelArgs, DataLoaderArgs, TrainerArgs]:
+   121→        for field in fields(config_type):
+   122→            if field.name in argument_dict:
+   123→                continue
+   124→
+   125→            argument_dict[field.name] = True
+   126→            field_type = field.type
+   127→            kwargs = {}
+   128→
+   129→            if field_type == bool:
+   130→                kwargs["action"] = "store_true"
+   131→                parser.add_argument(f"--{field.name}", **kwargs)
+   132→            else:
+   133→                kwargs["default"] = None
+   134→                parser.add_argument(f"--{field.name}", type=field_type, **kwargs)
+   135→
+   136→
+   137→    custom_args = parser.parse_args()
+   138→
+   139→    _model_args = copy.deepcopy(model_args[custom_args.model])
+   140→    _data_args = copy.deepcopy(data_args[custom_args.data])
+   141→    _trainer_args = copy.deepcopy(training_args[custom_args.hyperparams])
+   142→
+   143→    for k, v in custom_args.__dict__.items():
+   144→        if v is not None and v is not False:
+   145→            _model_args.__dict__[k] = v
+   146→            _data_args.__dict__[k] = v
+   147→            _trainer_args.__dict__[k] = v
+   148→
+   149→    return _model_args, _data_args, _trainer_args
+   150→
+   151→
+   152→def parse_nnscaler_args():
+   153→    parser = argparse.ArgumentParser(description="training arguments")
+   154→    parser.add_argument(f"--model", type=str, choices=model_args.keys())
+   155→    parser.add_argument(f"--data", type=str, choices=data_args.keys())
+   156→    parser.add_argument(f"--hyperparams", type=str, choices=training_args.keys())
+   157→
+   158→    argument_dict = {}
+   159→
+   160→    # Add arguments for each field in the dataclass
+   161→    for config_type in [ModelArgs, DataLoaderArgs, TrainerArgs]:
+   162→        for field in fields(config_type):
+   163→            if field.name in argument_dict:
+   164→                continue
+   165→
+   166→            argument_dict[field.name] = True
+   167→            field_type = field.type
+   168→            kwargs = {}
+   169→
+   170→            if field_type == bool:
+   171→                kwargs["action"] = "store_true"
+   172→                parser.add_argument(f"--{field.name}", **kwargs)
+   173→            else:
+   174→                kwargs["default"] = None
+   175→                parser.add_argument(f"--{field.name}", type=field_type, **kwargs)
+   176→
+   177→    parser.add_argument(
+   178→        '--name',
+   179→        default='',
+   180→        type=str,
+   181→        help='name of the experiment',
+   182→    )
+   183→    parser.add_argument(
+   184→        '--logger_level',
+   185→        default='INFO',
+   186→        type=str,
+   187→        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+   188→        help='logging level',
+   189→    )
+   190→    parser.add_argument(
+   191→        '--resume_path',
+   192→        default=None,
+   193→        type=str,
+   194→        help='path to dir of ckpts or the ckpt file to resume from',
+   195→    )
+   196→    parser.add_argument(
+   197→        '--with_merged',
+   198→        default=None,
+   199→        type=bool,
+   200→        help='whether to merge the checkpoint files. Only used when `checkpoint` is a directory.',
+   201→    )
+   202→    parser.add_argument(
+   203→        '--save_path',
+   204→        default=None,
+   205→        type=str,
+   206→        help='path to save the model',
+   207→    )
+   208→    parser.add_argument(
+   209→        '--precision',
+   210→        default='fp32',
+   211→        choices=['fp32', 'bf16'],
+   212→        help='precision of the model, note fp32 is supported by manually casting to bf16',
+   213→    )
+   214→    parser.add_argument(
+   215→        '--bf16_from_fp32',
+   216→        action='store_true',
+   217→        help='whether to resume a bf16 mixed precision training from a fp32 checkpoint, we neeed this flag to manipulate its state dict',
+   218→    )
+   219→    parser.add_argument(
+   220→        '--xentropy_recompute',
+   221→        action='store_true',
+   222→        help='enable chunk loss that exchanges the speed of training for the memory usage',
+   223→    )
+   224→    parser.add_argument(
+   225→        '--xentropy_chunk_size',
+   226→        default=1024,
+   227→        type=int,
+   228→        help='the chunk size for recompute cross entropy loss',
+   229→    )
+   230→    parser.add_argument(
+   231→        '--run_mode',
+   232→        default='run',
+   233→        choices=['run', 'compile'],
+   234→        help='run or compile',
+   235→    )
+   236→    parser.add_argument(
+   237→        '--gen_reuse',
+   238→        default='auto',
+   239→        type=str,
+   240→        help='reuse the generated plan from the specified path',
+   241→    )
+   242→    parser.add_argument(
+   243→        '--trace_strategy',
+   244→        default='reuse_cache',
+   245→        type=str,
+   246→        help='trace strategy control the function execution during tracing model graph, `cuda_run_cpu_offload` and `reuse_cache` are recommended, please read `docs/source/parallel_module.md` for more information',
+   247→    )
+   248→    parser.add_argument(
+   249→        '--plan_ngpus',
+   250→        type=int,
+   251→        required=True,
+   252→        help='specify the scale unit size',
+   253→    )
+   254→    parser.add_argument(
+   255→        '--runtime_ngpus',
+   256→        type=int,
+   257→        required=True,
+   258→        help='specify the number of GPUs to use',
+   259→    )
+   260→    parser.add_argument(
+   261→        '--zero_group_size',
+   262→        type=int,
+   263→        default=None,
+   264→        help='specify the size of each zero group, runtime_ngpus = zero_ngroups * zero_group_size (default: runtime_ngpus)',
+   265→    )
+   266→    parser.add_argument(
+   267→        '--use_async_reducer',
+   268→        default=False,
+   269→        action='store_true',
+   270→        help='use async reducer to reduce the communication overhead',
+   271→    )
+   272→    parser.add_argument(
+   273→        '--reducer_bucket_cap_mb',
+   274→        default=200,
+   275→        type=int,
+   276→        help='bucket size in MB for the async reducer',
+   277→    )
+   278→    parser.add_argument(
+   279→        '--re_profile',
+   280→        default=False,
+   281→        action='store_true',
+   282→        help='re-profile for autodist',
+   283→    )
+   284→    parser.add_argument(
+   285→        '--disable_parallel_profile',
+   286→        default=False,
+   287→        action='store_true',
+   288→        help='enable parallel profile',
+   289→    )
+   290→    parser.add_argument(
+   291→        '--profile_dir',
+   292→        default=None,
+   293→        type=str,
+   294→        help='directory to save the profiling results',
+   295→    )
+   296→    parser.add_argument(
+   297→        '--gpu_mem_constraint',
+   298→        default=64,
+   299→        type=int,
+   300→        help='the max memory usage constraint (GB) per GPU during nnscaler generating distribution plan, recommended to be 80 percent of GPU memory',
+   301→    )
+   302→    parser.add_argument(
+   303→        '--partition_constraints_path',
+   304→        default='',
+   305→        type=str,
+   306→        help='path to the partition constraints file',
+   307→    )
+   308→    parser.add_argument(
+   309→        '--pipeline_pivots',
+   310→        default='',
+   311→        type=str,
+   312→        help='explore pipeline parallelism by specifying the pipeline pivots for autodist',
+   313→    )
+   314→    parser.add_argument(
+   315→        '--pipeline_nstages',
+   316→        default=1,
+   317→        type=str,
+   318→        help='specify the number of stages in the pipeline (use "1" to disable pipeline; use "auto" for autodist)',
+   319→    )
+   320→    parser.add_argument(
+   321→        '--recompute_modules',
+   322→        default='',
+   323→        type=str,
+   324→        help='specify the modules to recompute in autodist',
+   325→    )
+   326→    parser.add_argument(
+   327→        '--recompute_ratio',
+   328→        default=1.0,
+   329→        type=float,
+   330→        help='specify the ratio of modules to recompute when only one module is specified in `recompute_modules`',
+   331→    )
+   332→    parser.add_argument(
+   333→        '--disable_shared_param_constraint',
+   334→        action='store_true',
+   335→        help='disable the shared parameter constraint in spmd solver of nnscaler',
+   336→    )
+   337→    parser.add_argument(
+   338→        '--checkpoint_format',
+   339→        default='pt',
+   340→        type=str,
+   341→        choices=['pt', 'safetensors'],
+   342→        help='format to save checkpoints',
+   343→    )
+   344→    parser.add_argument(
+   345→        '--no_save',
+   346→        action='store_true',
+   347→        help='disable saving checkpoints',
+   348→    )
+   349→    parser.add_argument(
+   350→        '--checkpoint_serializer',
+   351→        default='split',
+   352→        type=str,
+   353→        choices=['', 'split', 'norm2split'],
+   354→    )
+   355→    parser.add_argument(
+   356→        '--reducer_pre_divisor',
+   357→        default=1.0,
+   358→        type=float,
+   359→        help='pre-divisor to scale down the gradients before all-reduce, useful when gradients are large',
+   360→    )
+   361→    parser.add_argument(
+   362→        '--accumulate_allreduce_grads_in_fp32',
+   363→        action='store_true',
+   364→        help='whether to accumulate allreduce grads in fp32',
+   365→    )
+   366→    parser.add_argument(
+   367→        '--check_dataloader_consistency',
+   368→        action='store_true',
+   369→        help='whether to check dataloader consistency before training',
+   370→    )
+   371→    parser.add_argument(
+   372→        '--async_save_ckpt',
+   373→        action='store_true',
+   374→        help='whether to save checkpoint asynchronously, it will disable save last and best checkpoint features,' \
+   375→        ' and auto find the latest checkpoint by modification time during resume',
+   376→    )
+   377→    parser.add_argument(
+   378→        '--gen_savedir',
+   379→        default='./.nnscaler',
+   380→        type=str,
+   381→        help='directory to save the generated files',
+   382→    )
+   383→    parser.add_argument(
+   384→        '--broadcast_strategy',
+   385→        default='all',
+   386→        type=str,
+   387→        choices=['all', 'none'],
+   388→        help='broadcast strategy for nnscaler distributed training',
+   389→    )
+   390→
+   391→    custom_args = parser.parse_args()
+   392→
+   393→    _model_args = copy.deepcopy(model_args[custom_args.model])
+   394→    _data_args = copy.deepcopy(data_args[custom_args.data])
+   395→    _trainer_args = copy.deepcopy(training_args[custom_args.hyperparams])
+   396→
+   397→    for k, v in custom_args.__dict__.items():
+   398→        if v is not None and v is not False:
+   399→            _model_args.__dict__[k] = v
+   400→            _data_args.__dict__[k] = v
+   401→            _trainer_args.__dict__[k] = v
+   402→
+   403→    if custom_args.profile_dir is not None:
+   404→        custom_args.disable_parallel_profile = True
+   405→    if custom_args.precision == 'bf16':
+   406→        custom_args.accumulate_allreduce_grads_in_fp32 = True
+   407→
+   408→    return _model_args, _data_args, _trainer_args, custom_args
+   409→
+   410→
+   411→def parse_eval_args():
+   412→    parser = argparse.ArgumentParser(description="evaluation arguments")
+   413→    parser.add_argument(f"--limit", type=int, default=None)
+   414→    parser.add_argument(f"--batch_size", type=int, default=32)
+   415→    parser.add_argument(f"--tasks", type=str, default=None)
+   416→    parser.add_argument(f"--valid_set", type=str, default=None)
+   417→    parser.add_argument(f"--checkpoint_dir", type=str, default=None)
+   418→    parser.add_argument(f"--merging_checkpoint_dir", type=str, default=None)
+   419→    parser.add_argument(f"--wandb_project", type=str, default=None)
+   420→    parser.add_argument(f"--wandb_id", type=str, default=None)
+   421→    parser.add_argument(f"--downstream_task", type=str, default=None)
+   422→    parser.add_argument(f"--output_dir", type=str, default='tmp/')
+   423→    parser.add_argument(f"--gen_kwargs", type=str, default=None)
+   424→    parser.add_argument(f"--num_fewshot", type=str, default=None)
+   425→    parser.add_argument(f"--random_seed", type=int, default=1234)
+   426→    return parser.parse_args()
+   427→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

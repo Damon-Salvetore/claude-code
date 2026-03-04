@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tail *)",
+      "Bash(head *)",
+      "Bash(wc *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(ps *)",
+      "Bash(nvidia-smi*)",
+      "Bash(kill *)",
+      "Bash(sleep *)",
+      "Bash(mkdir *)",
+      "Bash(chmod *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(echo *)",
+      "Bash(date *)",
+      "Bash(bash scripts/nvfp4_experiment/*)",
+      "Bash(nohup bash scripts/nvfp4_experiment/*)",
+      "Bash(python scripts/nvfp4_experiment/*)",
+      "Bash(bash -n *)",
+      "Bash(python3 -c *)",
+      "Bash(python3 -m py_compile *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ],
+    "deny": []
+  }
+}

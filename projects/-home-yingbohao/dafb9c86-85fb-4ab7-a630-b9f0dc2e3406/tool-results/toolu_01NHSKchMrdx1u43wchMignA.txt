@@ -1,0 +1,699 @@
+     1→import zipfile
+     2→import json
+     3→import gzip
+     4→import os
+     5→from dataclasses import dataclass
+     6→import random
+     7→import math
+     8→import torch
+     9→import collections
+    10→from io import BytesIO
+    11→from concurrent.futures import ThreadPoolExecutor
+    12→try:
+    13→    import libarchive
+    14→except ImportError:
+    15→    libarchive = None
+    16→import subprocess
+    17→
+    18→from torch import distributed as dist
+    19→
+    20→
+    21→import numpy as np
+    22→from typing import List
+    23→from .infinibatch import (
+    24→    CheckpointableIterator, 
+    25→    PrefetchIterator, 
+    26→    MapIterator, 
+    27→    SelectManyIterator,
+    28→    WeightIterator,
+    29→    MultiplexIterator,
+    30→    ChunkedSourceIterator,
+    31→    FixedBatchIterator
+    32→)
+    33→from .tokenizer import Tokenizer
+    34→from .packing import pack_data_for_batch
+    35→
+    36→@dataclass
+    37→class DataLoaderArgs:
+    38→    data_path: str = None
+    39→    data_weight: str = "1.0"
+    40→    max_seq_len: int = 2048
+    41→    seed: int = 1
+    42→    batch_size: int = 8
+    43→    num_epochs: int = 256
+    44→    num_workers: int = 2
+    45→    discard_length_threshold: int = 64
+    46→    # to split computation equally in context parallelism, add an option to pad the sequence length to be divisible by a number (e.g., 2 * cp_group_size)
+    47→    packing_strategy: str = 'ffd'
+    48→    pad_divisible_by: int = 1
+    49→    stack_file_size: int = 1
+    50→    skip_to_next_iteration: bool = False
+    51→    vault_name: str = ""
+    52→    vault_token: str = ""
+    53→    whl_path: str = "/mnt/msranlp/hangbo/whl/dataloader.whl"
+    54→
+    55→    def __post_init__(self):
+    56→        assert (self.max_seq_len * self.batch_size) % self.pad_divisible_by == 0, f"max_seq_len * batch_size {self.max_seq_len * self.batch_size} should be divisible by pad_divisible_by {self.pad_divisible_by}"
+    57→
+    58→
+    59→def _broadcast_string_from_rank0(string_value, rank):
+    60→    obj_list = [string_value] if rank == 0 else [""]
+    61→    dist.broadcast_object_list(obj_list, src=0)
+    62→    return obj_list[0]
+    63→
+    64→
+    65→def get_password(data_args):
+    66→    if data_args.whl_path:
+    67→        with open(data_args.whl_path, 'r') as f:
+    68→            password = f.read().strip()
+    69→        return password
+    70→    if dist.is_initialized():
+    71→        world_size = dist.get_world_size()
+    72→        global_rank = dist.get_rank()
+    73→    else:
+    74→        world_size = 1
+    75→        global_rank = 0
+    76→    
+    77→    if data_args.vault_name != "" and data_args.vault_token != "":
+    78→        if global_rank == 0 or world_size == 1:
+    79→            command = f"az keyvault secret show --vault-name {data_args.vault_name} --name {data_args.vault_token} --query value -o tsv"
+    80→            password = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).stdout.read().decode().strip()
+    81→            # os.system("az account clear")
+    82→        else:
+    83→            password = ""
+    84→        
+    85→        if world_size > 1:
+    86→            password = _broadcast_string_from_rank0(password, global_rank)
+    87→        if len(password) != 64:
+    88→                raise ValueError("Retrieved empty password from Azure Key Vault")            
+    89→        return password
+    90→    else:
+    91→        return ""
+    92→
+    93→
+    94→def _read_from_encrypted_zip_libarchive(file_path, password):
+    95→    lines = []
+    96→    with libarchive.file_reader(file_path, passphrase=password.encode()) as archive:
+    97→        for entry in archive:
+    98→            io_buffer = BytesIO()
+    99→            # if entry.name.endswith('.jsonl') or entry.name.endswith('.json'):
+   100→            for block in entry.get_blocks():
+   101→                io_buffer.write(block)
+   102→            io_buffer.seek(0)
+   103→            for line in io_buffer.readlines():
+   104→                lines.append(line.decode('utf-8'))
+   105→            break
+   106→    return lines
+   107→
+   108→
+   109→def apply_to_sample(sample):
+   110→    if hasattr(sample, "__len__") and len(sample) == 0:
+   111→        return {}
+   112→
+   113→    def _apply(x):
+   114→        if isinstance(x, np.ndarray):
+   115→            return torch.tensor(x, device='cuda')
+   116→            # return torch.from_numpy(x).pin_memory().to('cuda', non_blocking=True)
+   117→        elif isinstance(x, collections.OrderedDict):
+   118→            # OrderedDict has attributes that needs to be preserved
+   119→            od = collections.OrderedDict(
+   120→                (key, _apply(value)) for key, value in x.items()
+   121→            )
+   122→            od.__dict__ = x.__dict__
+   123→            return od
+   124→        elif isinstance(x, dict):
+   125→            return {key: _apply(value) for key, value in x.items()}
+   126→        elif isinstance(x, list):
+   127→            return [_apply(x) for x in x]
+   128→        elif isinstance(x, tuple):
+   129→            return tuple(_apply(x) for x in x)
+   130→        elif isinstance(x, set):
+   131→            return {_apply(x) for x in x}
+   132→        else:
+   133→            return x
+   134→
+   135→    return _apply(sample)
+   136→
+   137→# check the last 40 characters for repeated patterns
+   138→def naive_detect_repeat_at_end(text):
+   139→    text = text.strip()
+   140→    if len(text) < 8000:
+   141→        return False
+   142→    # if text[-40:] == text[-80:-40]:
+   143→    # add -120:-80 in case the tail contains special tokens that make -40:-0 different
+   144→    if text[-40:] == text[-80:-40] or text[-80:-40] == text[-120:-80]:
+   145→        return text.count(text[-80:-40]) >= 32
+   146→    else:
+   147→        return False
+   148→
+   149→class LMLoader(CheckpointableIterator):
+   150→    def __init__(
+   151→        self,
+   152→        args,
+   153→        seed=1,
+   154→        shuffle=True,
+   155→        prefetch=True,
+   156→        num_shards=1,
+   157→        shard_id=0,
+   158→        device='cuda'
+   159→    ):
+   160→        super().__init__()
+   161→        self.args = args
+   162→        self.data = self._prepare_data(args.data_path, args.data_weight)
+   163→        self.tokenizer = Tokenizer()
+   164→
+   165→        self.global_seed = seed
+   166→        self.seed = seed + shard_id
+   167→        self.shuffle = shuffle
+   168→        self.prefetch = prefetch
+   169→        self.num_shards = num_shards
+   170→        self.shard_id = shard_id
+   171→        self.device = device
+   172→        self.wav_password = get_password(args)
+   173→        self._build_iter()
+   174→
+   175→    @staticmethod
+   176→    def _create_multiturn_loss_mask(full_tokens, tokenizer, file_path):
+   177→        """
+   178→        Create loss mask for multi-turn conversation that only trains on assistant responses.
+   179→        
+   180→        Logic:
+   181→        1. Find "<|start|>assistant" pattern
+   182→        2. Set loss_mask to True from after "assistant" to the nearest end token (<|call|>, <|end|>, or <|return|>)
+   183→        3. If the position before "<|start|>" has loss_mask=True, also set "<|start|>assistant" to True
+   184→           (This handles consecutive assistant messages like: <|end|><|start|>assistant<|channel|>final...)
+   185→        """
+   186→        loss_mask = [False] * len(full_tokens)
+   187→        
+   188→        # Token patterns
+   189→        assistant_start_tokens = tokenizer.encode("<|start|>assistant", bos=False, eos=False)
+   190→        end_tokens_list = [
+   191→            tokenizer.encode("<|call|>", bos=False, eos=False),
+   192→            tokenizer.encode("<|end|>", bos=False, eos=False),
+   193→            tokenizer.encode("<|return|>", bos=False, eos=False)
+   194→        ]
+   195→        
+   196→        assistant_count = 0
+   197→        i = 0
+   198→        
+   199→        while i <= len(full_tokens) - len(assistant_start_tokens):
+   200→            # Look for "<|start|>assistant" pattern
+   201→            if full_tokens[i:i+len(assistant_start_tokens)] == assistant_start_tokens:
+   202→                assistant_count += 1
+   203→                
+   204→                # Check if position before "<|start|>" has loss_mask=True
+   205→                # If so, include "<|start|>assistant" in the training
+   206→                include_start = (i > 0 and loss_mask[i - 1])
+   207→                
+   208→                # Start position for loss_mask (after "assistant" or from "<|start|>" if continuing)
+   209→                if include_start:
+   210→                    train_start = i
+   211→                else:
+   212→                    train_start = i + len(assistant_start_tokens)
+   213→                
+   214→                # Find the nearest end token
+   215→                end_pos = -1
+   216→                end_token_len = 0
+   217→                
+   218→                search_start = i + len(assistant_start_tokens)
+   219→                for end_tokens in end_tokens_list:
+   220→                    j = search_start
+   221→                    while j <= len(full_tokens) - len(end_tokens):
+   222→                        if full_tokens[j:j+len(end_tokens)] == end_tokens:
+   223→                            if end_pos == -1 or j < end_pos:
+   224→                                end_pos = j
+   225→                                end_token_len = len(end_tokens)
+   226→                            break
+   227→                        j += 1
+   228→                
+   229→                if end_pos == -1:
+   230→                    print(f"Error: Assistant start token found but no matching end token at position {i}. file_path: {file_path}")
+   231→                    raise ValueError(f"Assistant start token found but no matching end token. file_path: {file_path}")
+   232→                
+   233→                # Set loss_mask to True from train_start to end_pos + end_token_len (inclusive)
+   234→                for k in range(train_start, end_pos + end_token_len):
+   235→                    loss_mask[k] = True
+   236→                
+   237→                # Move past this assistant response
+   238→                i = end_pos + end_token_len
+   239→            else:
+   240→                i += 1
+   241→        
+   242→        # Ensure at least one assistant response exists
+   243→        if assistant_count == 0:
+   244→            print(f"Error: No assistant tokens found in the conversation. file_path: {file_path}")
+   245→            raise ValueError(f"No assistant tokens found in the conversation. file_path: {file_path}")
+   246→        
+   247→        return loss_mask
+   248→
+   249→    def _prepare_data(self, data_path, data_weight):
+   250→        data_path = data_path.split(',')
+   251→        data_weight = [float(x) for x in data_weight.split(',')]
+   252→        assert len(data_path) == len(data_weight), "data_path and data_weight should have the same length"
+   253→        total_weight = sum(data_weight)
+   254→        data_weight = [x / total_weight for x in data_weight]
+   255→
+   256→        data = []
+   257→        for i in range(len(data_path)):
+   258→            config_data = json.load(open(data_path[i], "r"))
+   259→            if isinstance(config_data[0], str):
+   260→                data.append(
+   261→                    {
+   262→                        'name': data_path[i],
+   263→                        'source': data_path[i],
+   264→                        'weight': data_weight[i],
+   265→                        'config': data_path[i]
+   266→                    }
+   267→                )
+   268→                continue
+   269→            recursive_data = self._recursive_load_data(config_data, data_weight[i], data_path[i])
+   270→            data.extend(recursive_data)
+   271→        return data
+   272→
+   273→    def _recursive_load_data(self, data_list, accumulated_weight, config_path):
+   274→        result = []
+   275→        
+   276→        total_weight = sum(item['weight'] for item in data_list)
+   277→        for item in data_list:
+   278→            item['weight'] = item['weight'] / total_weight
+   279→        
+   280→        for item in data_list:
+   281→            current_weight = accumulated_weight * item['weight']
+   282→
+   283→            if 'source' not in item:
+   284→                base_path = os.path.dirname(config_path)
+   285→                assert os.path.exists(f"{base_path}/{item['name']}.json"), f"file {base_path}/{item['name']}.json not exists"
+   286→                data_source = f"{base_path}/{item['name']}.json"
+   287→                item['source'] = data_source
+   288→            
+   289→            if isinstance(json.load(open(item["source"], "r"))[0], str): # leaf node
+   290→                item['weight'] = current_weight
+   291→                item['config'] = config_path
+   292→                result.append(item)
+   293→            else:
+   294→                source_path = item['source']
+   295→                sub_data = json.load(open(source_path, "r"))
+   296→                sub_result = self._recursive_load_data(sub_data, current_weight, source_path)
+   297→                result.extend(sub_result)
+   298→        
+   299→        return result
+   300→
+   301→    def _build_iter(self):
+   302→        tokenized_lines = self._tokenize_and_sampling()
+   303→        padded_batches = self._batchify(tokenized_lines)
+   304→
+   305→        if self.prefetch:
+   306→            buffer_size = int(64 * 2 ** 20 / self.args.max_seq_len)
+   307→            prefetch_batches = PrefetchIterator(
+   308→                padded_batches,
+   309→                buffer_size=buffer_size,
+   310→                buffer_in_main_process=True,
+   311→                log_empty_buffer_warning=True and self.shard_id == 0,
+   312→            )
+   313→        else:
+   314→            prefetch_batches = padded_batches
+   315→
+   316→        prefetch_batches = MapIterator(prefetch_batches, apply_to_sample)
+   317→
+   318→        self._iter = prefetch_batches
+   319→
+   320→    def _tokenize_and_sampling(self):
+   321→        self.dataset_name = []
+   322→        multiple_iters = []
+   323→        weights = []
+   324→
+   325→        for data in self.data:
+   326→            if float(data["weight"]) == 0.0:
+   327→                if self.shard_id == 0:
+   328→                    print(f"Skipping data with weight 0: {data['name']}")
+   329→                continue
+   330→            multiple_iters.append(self._tokenize(data, len(self.dataset_name)))
+   331→            self.dataset_name.append(data["name"])
+   332→            weights.append(float(data["weight"]))
+   333→
+   334→        if self.args.num_workers > 1:
+   335→            multi_worker_lines = []
+   336→            num_workers = min(self.args.num_workers, len(multiple_iters))
+   337→            group_iters = [multiple_iters[i::num_workers] for i in range(num_workers)]
+   338→            group_weights = [weights[i::num_workers] for i in range(num_workers)]
+   339→            inter_group_weights = [sum(group_weights[i]) for i in range(num_workers)]
+   340→            inter_group_weights = [item / sum(inter_group_weights) for item in inter_group_weights]
+   341→            for i in range(num_workers):
+   342→                worker_weights = [item / sum(group_weights[i]) for item in group_weights[i]]
+   343→                control_iterator = WeightIterator(worker_weights, self.global_seed + self.shard_id * num_workers + i)
+   344→                tokenized_lines = MultiplexIterator(
+   345→                    control_iterator, group_iters[i], name=f"worker_{self.shard_id}_{i}"
+   346→                )
+   347→                tokenizer_lines = PrefetchIterator(
+   348→                    tokenized_lines,
+   349→                    buffer_size=8,
+   350→                    buffer_in_main_process=False,
+   351→                    log_empty_buffer_warning=False,
+   352→                )
+   353→                multi_worker_lines.append(tokenizer_lines)
+   354→            multi_worker_control_iterator = WeightIterator(inter_group_weights, self.seed)
+   355→            final_tokenized_lines = MultiplexIterator(
+   356→                multi_worker_control_iterator, multi_worker_lines, name="final_tokenized_lines"
+   357→            )
+   358→        else:
+   359→            multiple_iters = [item[0] for item in multiple_iters]
+   360→            control_iterator = WeightIterator(weights, self.seed)
+   361→            final_tokenized_lines = MultiplexIterator(
+   362→                control_iterator, multiple_iters
+   363→            )
+   364→        return final_tokenized_lines
+   365→
+   366→    def _tokenize(self, data, index):
+   367→        dataset = json.load(open(data["source"], "r"))
+   368→        num_files = len(dataset)
+   369→        if num_files > 500000:
+   370→            num_epochs_ceil = 5
+   371→        elif num_files > 100000:
+   372→            num_epochs_ceil = 8
+   373→        elif num_files > 50000:
+   374→            num_epochs_ceil = 16
+   375→        elif num_files > 10000:
+   376→            num_epochs_ceil = 32
+   377→        else:
+   378→            num_epochs_ceil = math.ceil(self.args.num_epochs)
+   379→        
+   380→        all_indices = np.tile(np.arange(num_files), num_epochs_ceil)
+   381→        if self.shuffle:
+   382→            # Shuffle each epoch's portion in-place using threading for speedup
+   383→            # NumPy releases the GIL during shuffle, allowing true parallel execution
+   384→            def _shuffle_epoch_inplace(epoch_idx):
+   385→                start = epoch_idx * num_files
+   386→                end = start + num_files
+   387→                rng = np.random.default_rng(self.global_seed + epoch_idx)
+   388→                rng.shuffle(all_indices[start:end])
+   389→            
+   390→            if num_epochs_ceil > 1 and num_files > 10000:
+   391→                # Use threading for larger datasets (provides ~1.5-2x speedup)
+   392→                num_workers = min(num_epochs_ceil, 8)
+   393→                with ThreadPoolExecutor(max_workers=num_workers) as executor:
+   394→                    list(executor.map(_shuffle_epoch_inplace, range(num_epochs_ceil)))
+   395→            else:
+   396→                # Sequential for small datasets (avoid threading overhead)
+   397→                for epoch_idx in range(num_epochs_ceil):
+   398→                    _shuffle_epoch_inplace(epoch_idx)
+   399→            
+   400→            # Use numpy array indexing for fast lookup
+   401→            # dataset_arr = np.array(dataset, dtype=object)
+   402→            # dataset = dataset_arr[all_indices]
+   403→
+   404→        all_indices = [all_indices[i:i+self.args.stack_file_size] for i in range(0, len(all_indices), self.args.stack_file_size)]
+   405→        assert len(all_indices) >= self.num_shards, f"dataset length should be greater than or equal to num_shards, dataset: {len(all_indices)}, num_shards: {self.num_shards}"
+   406→        chunk_indices = ChunkedSourceIterator(
+   407→            all_indices,
+   408→            num_instances=self.num_shards,
+   409→            instance_rank=self.shard_id,
+   410→        )
+   411→        tokenized_lines = SelectManyIterator(
+   412→            chunk_indices, lambda indices: self._read_from_files([dataset[index] for index in indices], self._line_to_tokens, index), name=data["name"] + f"_shard_{self.shard_id}", skip_to_next_iteration=self.args.skip_to_next_iteration
+   413→        )
+   414→        return tokenized_lines
+   415→
+   416→    def _batchify(self, lines):
+   417→        # if self.shuffle:
+   418→        #     lines = BlockwiseShuffleIterator(
+   419→        #         lines, self.args.batch_read_ahead, self.seed
+   420→        #     )
+   421→
+   422→        batches = FixedBatchIterator(lines, self.args.batch_size)
+   423→        padded_batches = MapIterator(batches, self.collate)
+   424→        return padded_batches
+   425→
+   426→    def collate(self, batch):
+   427→        input_ids = []
+   428→        target_ids = []
+   429→        positions = []
+   430→        loss_mask = []
+   431→        loss_index = []
+   432→        cu_seqlens = [0]
+   433→        max_seqlen = 0
+   434→        batch = [x for x_list in batch for x in x_list]
+   435→        for i, ids in enumerate(batch):
+   436→            input_ids.extend(ids['source'])
+   437→            target_ids.extend(ids['target'])
+   438→            loss_mask.extend(ids['loss_mask'])
+   439→            loss_index.extend(ids['loss_index'])
+   440→            positions.extend(list(range(len(ids['source']))))
+   441→            cu_seqlens.append(cu_seqlens[-1] + len(ids['source']))
+   442→            max_seqlen = max(max_seqlen, len(ids['source']))
+   443→
+   444→        pad_seqlen = self.args.batch_size * self.args.max_seq_len - len(input_ids)
+   445→        if pad_seqlen > 0:
+   446→            input_ids.extend([self.tokenizer.pad_id] * pad_seqlen)
+   447→            target_ids.extend([self.tokenizer.pad_id] * pad_seqlen)
+   448→            loss_mask.extend([False] * pad_seqlen)
+   449→            loss_index.extend([0] * pad_seqlen)
+   450→            positions.extend([0] * pad_seqlen)
+   451→            cu_seqlens.append(cu_seqlens[-1] + pad_seqlen)
+   452→        
+   453→        input_ids = np.array(input_ids, dtype=np.int64)
+   454→        target_ids = np.array(target_ids, dtype=np.int64)
+   455→        loss_mask = np.array(loss_mask, dtype=bool)
+   456→        loss_index = np.array(loss_index, dtype=np.int32)
+   457→        context = {
+   458→            'cu_seqlens_q': np.array(cu_seqlens, dtype=np.int32),
+   459→            'cu_seqlens_k': np.array(cu_seqlens, dtype=np.int32),
+   460→            'max_seqlen_q': max_seqlen,
+   461→            'max_seqlen_k': max_seqlen,
+   462→            'positions': np.array(positions, dtype=np.int32),
+   463→        }
+   464→        target_ids = np.where(loss_mask, target_ids, self.tokenizer.pad_id)
+   465→
+   466→        batch = {
+   467→            'tokens': input_ids,
+   468→            'targets': target_ids,
+   469→            'context': context,
+   470→            'loss_mask': loss_mask,
+   471→            'loss_index': loss_index,
+   472→            'dataset_length': len(self.dataset_name)
+   473→        }
+   474→        return batch
+   475→
+   476→    def _line_to_tokens(self, line, file_path):
+   477→        is_chat_line = False
+   478→        line = line.strip()
+   479→        if not line:
+   480→            print(f"Empty line in file {file_path}")
+   481→            return None, None, None
+   482→
+   483→        # Parse JSON and handle errors
+   484→        try:
+   485→            line = json.loads(line)
+   486→        except json.decoder.JSONDecodeError as e:
+   487→            print(f"Error parsing JSON line: {e} in file {file_path}")
+   488→            return None, None, None
+   489→        
+   490→        # some synthetic data sets use ('problem', 'completion') as the key instead of ('prompt', 'completion')
+   491→        if 'problem' in line:
+   492→            line['prompt'] = line['problem']
+   493→            del line['problem']
+   494→        if 'question' in line:
+   495→            line['prompt'] = line['question']
+   496→            del line['question']
+   497→
+   498→        if 'text' in line and 'thought' in line:
+   499→            # Note (wangliang): for TPT data, avoid too many chunks that do not have thinking
+   500→            if line.get('input_token_count', -1) > 64 * 1024:
+   501→                # print(f"Skipping line with too many input tokens ({line.get('input_token_count')}) in file {file_path}")
+   502→                return None, None, None
+   503→            tokens = self.tokenizer.encode(f"{line['text']}\n\n<think>\n{line['thought']}\n</think>", bos=True, eos=True)
+   504→            loss_mask = [True] * len(tokens)
+   505→        elif 'text' in line or 'raw_content_lines' in line:
+   506→            if 'text' in line:
+   507→                text = line['text']
+   508→            elif 'raw_content_lines' in line:
+   509→                text = ' '.join(line['raw_content_lines'])
+   510→            else:
+   511→                # should not go here
+   512→                raise ValueError(f"unknown line keys: {line.keys()} in file {file_path}")
+   513→
+   514→            if naive_detect_repeat_at_end(text):
+   515→                print(f"Skipping line with repeated patterns at {file_path}")
+   516→                return None, None, None
+   517→            
+   518→            tokens = self.tokenizer.encode(text, bos=True, eos=True)
+   519→            loss_mask = [True] * len(tokens)
+   520→        elif 'prompt' in line and 'completion' in line:
+   521→            system_prompt = "You are a helpful and friendly AI assistant."
+   522→            
+   523→            if 'think' in line:
+   524→                message = [
+   525→                    {"role": "system", "content": system_prompt},
+   526→                    {"role": "user", "content": line["prompt"]},
+   527→                    {"role": "assistant", "content": f"<think>\n{line['think']}\n</think>\n\n{line['completion']}"}
+   528→                ]
+   529→            else:
+   530→                message = [
+   531→                    {"role": "system", "content": system_prompt},
+   532→                    {"role": "user", "content": line["prompt"]},
+   533→                    {"role": "assistant", "content": line["completion"]}
+   534→                ]
+   535→            
+   536→            if naive_detect_repeat_at_end(line['completion']):
+   537→                print(f"Skipping line with repeated patterns at {file_path}")
+   538→                return None, None, None
+   539→
+   540→            full_text = self.tokenizer.apply_chat_template(message)
+   541→            full_tokens = self.tokenizer.encode(full_text, bos=True, eos=False)
+   542→            tokens = full_tokens
+   543→            loss_mask = self._create_multiturn_loss_mask(full_tokens, self.tokenizer, file_path)
+   544→            is_chat_line = True
+   545→        else:
+   546→            raise ValueError(f"unknown line keys: {line.keys()} in file {file_path}")
+   547→        return tokens, loss_mask, is_chat_line
+   548→
+   549→    def _read_from_files(self, files, line_to_tokens_func, index):
+   550→        data = []
+   551→        for file_path in files:
+   552→            if not os.path.exists(file_path):
+   553→                continue
+   554→
+   555→            if file_path.endswith('.jsonl.gz'):
+   556→                with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+   557→                    read_lines = [line for line in f]
+   558→            elif file_path.endswith('.zip'):
+   559→                try:
+   560→                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
+   561→                        # Assume the zip contains a single .jsonl file
+   562→                        jsonl_filename = [name for name in zip_ref.namelist() if name.endswith('.jsonl')][0]
+   563→                        with zip_ref.open(jsonl_filename, 'r') as f:
+   564→                            read_lines = [line.decode('utf-8') for line in f]
+   565→                except zipfile.BadZipFile:
+   566→                    print(f"| file {file_path} is not a valid zip file", flush=True)
+   567→                    continue
+   568→            elif file_path.endswith('.wav'):
+   569→                read_lines = _read_from_encrypted_zip_libarchive(file_path, password=self.wav_password)
+   570→            else:
+   571→                read_lines = open(file_path, "r", encoding="utf8").readlines()
+   572→            
+   573→            for line in read_lines:
+   574→                if len(line) > 10_000_000:
+   575→                    print(f"Skipping line with length {len(line)} at file {file_path}")
+   576→                    continue
+   577→                try:
+   578→                    tokens, loss_mask, is_chat_line = line_to_tokens_func(line, file_path)
+   579→                except Exception as e:
+   580→                    print(f"Skipping line due to error: {e} at file {file_path}", flush=True)
+   581→                    continue
+   582→                if tokens is None:
+   583→                    continue
+   584→                if is_chat_line and len(tokens) > self.args.max_seq_len: # Discard chat lines that exceed max_seq_len
+   585→                    continue
+   586→                if len(tokens) < self.args.discard_length_threshold:  # Discard lines shorter than threshold
+   587→                    continue
+   588→                source, target, loss_mask = tokens[:-1], tokens[1:], loss_mask[1:]
+   589→                loss_index = [index] * len(source)
+   590→                data.append({
+   591→                    'source': source,
+   592→                    'target': target,
+   593→                    'loss_mask': loss_mask,
+   594→                    'loss_index': loss_index,
+   595→                    'is_chat_line': is_chat_line
+   596→                })
+   597→        
+   598→        def tokens_count(local_data):
+   599→            return sum(len(item['source']) for item in local_data)
+   600→        # Use a deterministic hash instead of Python's built-in hash()
+   601→        # Python's hash() can return different values across processes due to PYTHONHASHSEED
+   602→        import hashlib
+   603→        file_hash = int(hashlib.md5(files[0].encode()).hexdigest(), 16) % (2**32)
+   604→        rng = np.random.default_rng((file_hash + self.seed) % (2**32))
+   605→        rng.shuffle(data)
+   606→        if self.args.packing_strategy == 'naive':
+   607→            final_data = []
+   608→            while tokens_count(data) > self.args.max_seq_len:
+   609→                yield_data = []
+   610→                while tokens_count(yield_data) < self.args.max_seq_len and len(data) > 0:
+   611→                    next_data = data.pop(0)
+   612→                    # Regular text can be truncated if needed
+   613→                    if tokens_count(yield_data) + len(next_data['source']) > self.args.max_seq_len:
+   614→                        if next_data['is_chat_line']:
+   615→                            data.insert(rng.integers(0, len(data) + 1), next_data)
+   616→                            break
+   617→                        else:
+   618→                            cut_len = self.args.max_seq_len - tokens_count(yield_data)
+   619→                            # The reason is that the remaining part may have no entire start and if the remaining part is too short, we discard it.  e.g., a sentence is cut off in the middle. 
+   620→                            if len(next_data['source'][cut_len:]) > self.args.discard_length_threshold:
+   621→                                data.insert(rng.integers(0, len(data) + 1), {
+   622→                                    'source': [self.tokenizer.bos_id] + next_data['source'][cut_len:],
+   623→                                    'target': [next_data['source'][cut_len]] + next_data['target'][cut_len:],
+   624→                                    'loss_mask': [True] + next_data['loss_mask'][cut_len:],
+   625→                                    'loss_index': [index] + next_data['loss_index'][cut_len:],
+   626→                                    'is_chat_line': next_data['is_chat_line'],
+   627→                                })
+   628→                            next_data['source'] = next_data['source'][:cut_len]
+   629→                            next_data['target'] = next_data['target'][:cut_len]
+   630→                            next_data['loss_mask'] = next_data['loss_mask'][:cut_len]
+   631→                            next_data['loss_index'] = next_data['loss_index'][:cut_len]
+   632→
+   633→                    current_len = len(next_data['source'])
+   634→                    if current_len % self.args.pad_divisible_by != 0:
+   635→                        pad_len = self.args.pad_divisible_by - (current_len % self.args.pad_divisible_by)
+   636→                        next_data['source'] = next_data['source'] + [self.tokenizer.pad_id] * pad_len
+   637→                        next_data['target'] = next_data['target'] + [self.tokenizer.pad_id] * pad_len
+   638→                        next_data['loss_mask'] = next_data['loss_mask'] + [False] * pad_len
+   639→                        next_data['loss_index'] = next_data['loss_index'] + [index] * pad_len
+   640→                    yield_data.append(next_data)
+   641→                
+   642→                final_data.append(yield_data)
+   643→            rng.shuffle(final_data)
+   644→            return final_data
+   645→        else:
+   646→            assert self.args.packing_strategy in ['ffd', 'bfd'], f"Unknown packing strategy: {self.args.packing_strategy}"
+   647→            split_data = []
+   648→            for item in data:
+   649→                while len(item['source']) > self.args.max_seq_len:
+   650→                    split_data.append({
+   651→                        'source': item['source'][:self.args.max_seq_len],
+   652→                        'target': item['target'][:self.args.max_seq_len],
+   653→                        'loss_mask': item['loss_mask'][:self.args.max_seq_len],
+   654→                        'loss_index': item['loss_index'][:self.args.max_seq_len],
+   655→                        'is_chat_line': item['is_chat_line']
+   656→                    })
+   657→                    item['source'] = [self.tokenizer.bos_id] + item['source'][self.args.max_seq_len:]
+   658→                    item['target'] = [item['source'][1]] + item['target'][self.args.max_seq_len:]
+   659→                    item['loss_mask'] = [True] + item['loss_mask'][self.args.max_seq_len:]
+   660→                    item['loss_index'] = [index] + item['loss_index'][self.args.max_seq_len:]
+   661→                    item['is_chat_line'] = item['is_chat_line']
+   662→                if len(item['source']) > self.args.discard_length_threshold:
+   663→                    current_len = len(item['source'])
+   664→                    if current_len % self.args.pad_divisible_by != 0:
+   665→                        pad_len = self.args.pad_divisible_by - (current_len % self.args.pad_divisible_by)
+   666→                        item['source'] = item['source'] + [self.tokenizer.pad_id] * pad_len
+   667→                        item['target'] = item['target'] + [self.tokenizer.pad_id] * pad_len
+   668→                        item['loss_mask'] = item['loss_mask'] + [False] * pad_len
+   669→                        item['loss_index'] = item['loss_index'] + [index] * pad_len
+   670→                    split_data.append(item)
+   671→            return pack_data_for_batch(split_data, self.args.max_seq_len, algorithm=self.args.packing_strategy)
+   672→
+   673→    @property
+   674→    def iterator(self):
+   675→        if self._iter is None:
+   676→            raise NotImplementedError("_build_iter() must called first")
+   677→        return self._iter
+   678→
+   679→    def __iter__(self):
+   680→        if self._iter is None:
+   681→            raise NotImplementedError("_build_iter() must called first")
+   682→        return self._iter
+   683→
+   684→    def __next__(self):
+   685→        return next(self._iter)
+   686→
+   687→    def setstate(self, value):
+   688→        self._iter.setstate(value)
+   689→
+   690→    def getstate(self):
+   691→        return self._iter.getstate()
+   692→
+   693→    def close(self):
+   694→        self._iter.close()
+   695→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

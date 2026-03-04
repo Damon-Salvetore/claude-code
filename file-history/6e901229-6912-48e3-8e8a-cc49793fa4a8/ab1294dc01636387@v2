@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------
+# run_all.sh — Batch launcher for all 8 NVFP4 experiments
+#
+# Usage:
+#   bash scripts/nvfp4_experiment/run_all.sh             # serial (single machine, one at a time)
+#   bash scripts/nvfp4_experiment/run_all.sh --parallel   # parallel (multi-machine, all at once)
+#
+# Serial mode (default): runs experiments one-by-one, each occupying 4 GPUs.
+# Parallel mode: launches all 8 experiments in background — use on separate
+#   machines or when you have enough GPUs.
+# ---------------------------------------------------------------
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOG_DIR="${PROJECT_DIR}/logs"
+
+mkdir -p "$LOG_DIR"
+
+# -------- parse flags --------
+PARALLEL=false
+if [[ "${1:-}" == "--parallel" ]]; then
+    PARALLEL=true
+fi
+
+# -------- experiment matrix --------
+MODELS=("Base-0.4B" "GatedAttn-0.4B" "DiffAttn-0.4B" "GatedDiffAttn-0.4B")
+MODES=("baseline" "nvfp4")
+
+# -------- PID tracking --------
+PID_FILE="${LOG_DIR}/pids.txt"
+> "$PID_FILE"  # truncate
+
+TOTAL=${#MODELS[@]}*${#MODES[@]}
+echo "============================================="
+echo "  NVFP4 Experiment Launcher"
+echo "  Models: ${MODELS[*]}"
+echo "  Modes:  ${MODES[*]}"
+echo "  Total:  $((${#MODELS[@]} * ${#MODES[@]})) experiments"
+echo "  Mode:   $(if $PARALLEL; then echo 'PARALLEL'; else echo 'SERIAL'; fi)"
+echo "============================================="
+echo ""
+
+launch_experiment() {
+    local model="$1"
+    local mode="$2"
+    local run_name="${model}-${mode}"
+    local log_file="${LOG_DIR}/${run_name}.log"
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching: ${run_name}"
+
+    if $PARALLEL; then
+        # Background launch — redirect all output to log file
+        bash "${SCRIPT_DIR}/run_single.sh" "$model" "$mode" \
+            > "$log_file" 2>&1 &
+        local pid=$!
+        echo "${pid} ${run_name}" >> "$PID_FILE"
+        echo "  PID: ${pid}  Log: ${log_file}"
+    else
+        # Foreground (serial) — also record PID for monitor compatibility
+        bash "${SCRIPT_DIR}/run_single.sh" "$model" "$mode" &
+        local pid=$!
+        echo "${pid} ${run_name}" >> "$PID_FILE"
+        echo "  PID: ${pid}  Log: ${log_file}"
+        echo "  Waiting for ${run_name} to finish..."
+        wait "$pid"
+        local exit_code=$?
+        if [[ $exit_code -ne 0 ]]; then
+            echo "  WARNING: ${run_name} exited with code ${exit_code}"
+        else
+            echo "  DONE: ${run_name} completed successfully"
+        fi
+        echo ""
+    fi
+}
+
+# -------- launch all experiments --------
+for model in "${MODELS[@]}"; do
+    for mode in "${MODES[@]}"; do
+        launch_experiment "$model" "$mode"
+    done
+done
+
+if $PARALLEL; then
+    echo ""
+    echo "All experiments launched in background."
+    echo "PIDs recorded in: ${PID_FILE}"
+    echo ""
+    echo "Monitor with:  bash scripts/nvfp4_experiment/monitor.sh"
+    echo "Check logs in:  ${LOG_DIR}/"
+    echo ""
+    echo "Waiting for all experiments to complete..."
+    echo ""
+
+    # Wait for all background jobs and report results
+    FAILED=0
+    while IFS=' ' read -r pid name; do
+        if wait "$pid" 2>/dev/null; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] DONE: ${name} (PID ${pid}) — SUCCESS"
+        else
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] DONE: ${name} (PID ${pid}) — FAILED"
+            FAILED=$((FAILED + 1))
+        fi
+    done < "$PID_FILE"
+
+    echo ""
+    if [[ $FAILED -eq 0 ]]; then
+        echo "All experiments completed successfully!"
+    else
+        echo "${FAILED} experiment(s) FAILED. Check logs for details."
+    fi
+else
+    echo "============================================="
+    echo "  All serial experiments completed!"
+    echo "============================================="
+fi
+
+echo ""
+echo "Collect results with:  python scripts/nvfp4_experiment/collect_results.py"

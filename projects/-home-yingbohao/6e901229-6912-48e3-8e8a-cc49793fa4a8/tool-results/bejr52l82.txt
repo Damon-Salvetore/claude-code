@@ -1,0 +1,822 @@
+=============================================
+  Serial handoff test: 3 modes × max_updates=5
+  Start: 2026-03-04 18:11:31
+=============================================
+
+[1/3] Base-0.4B baseline
+Start: 2026-03-04 18:11:31
+[2026-03-04 18:11:31] Pre-cleanup: killing any leftover processes for Base-0_4B-baseline...
+[2026-03-04 18:11:33] Starting experiment: Base-0.4B-baseline
+[2026-03-04 18:11:33] Log file: /home/yingbohao/llm-train/logs/Base-0.4B-baseline.log
+[2026-03-04 18:11:34] torchrun PID: 2494075
+W0304 18:11:35.199000 2494075 torch/distributed/run.py:853] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0304 18:11:35.199000 2494075 torch/distributed/run.py:853] *****************************************
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+2026-03-04 18:11:40 | WARNING | nnscaler.cli.trainer_args | `last` checkpoint does not exist. Will train from scratch.
+2026-03-04 18:11:40 | WARNING | nnscaler.cli.trainer_args | `last` checkpoint does not exist. Will train from scratch.
+2026-03-04 18:11:40 | WARNING | nnscaler.cli.trainer_args | `last` checkpoint does not exist. Will train from scratch.
+2026-03-04 18:11:40 | WARNING | nnscaler.cli.trainer_args | `last` checkpoint does not exist. Will train from scratch.
+# of model parameters: 701.24M
+/usr/local/lib/python3.12/dist-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+# of model parameters: 701.24M
+# of model parameters: 701.24M
+# of model parameters: 701.24M
+2026-03-04 18:11:45 | INFO | arch.attention | Attention layer 0 is_self_layer: True, window_size: -1
+2026-03-04 18:11:45 | INFO | arch.attention | Attention layer 1 is_self_layer: True, window_size: -1
+2026-03-04 18:11:45 | INFO | arch.attention | Attention layer 2 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 3 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 4 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 5 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 6 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 7 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 8 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 9 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 10 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 11 is_self_layer: True, window_size: -1
+2026-03-04 18:11:46 | INFO | arch.attention | Attention layer 12 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 13 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 14 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 15 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 16 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 17 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 18 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 19 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 20 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 21 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 22 is_self_layer: True, window_size: -1
+2026-03-04 18:11:47 | INFO | arch.attention | Attention layer 23 is_self_layer: True, window_size: -1
+2026-03-04 18:11:48 | INFO | __main__ | Model: Model(
+  (tok_embeddings): Embedding(201088, 1024)
+  (layers): ModuleList(
+    (0-23): 24 x Block(
+      (self_attn): Attention(
+        (rope): RotaryEmbedding(head_size=64, max_position_embeddings=4096, base=10000.0)
+        (q_proj): MixPrecisionLinear(in_features=1024, out_features=1024, bias=False)
+        (k_proj): MixPrecisionLinear(in_features=1024, out_features=256, bias=False)
+        (v_proj): MixPrecisionLinear(in_features=1024, out_features=256, bias=False)
+        (q_norm): Identity()
+        (k_norm): Identity()
+        (o_proj): MixPrecisionLinear(in_features=1024, out_features=1024, bias=False)
+      )
+      (mlp): FeedForwardNetwork(
+        (up_proj): MixPrecisionLinear(in_features=1024, out_features=3072, bias=False)
+        (down_proj): MixPrecisionLinear(in_features=3072, out_features=1024, bias=False)
+        (gate_proj): MixPrecisionLinear(in_features=1024, out_features=3072, bias=False)
+      )
+      (input_layernorm): RMSNorm(dim=1024, eps=1e-06)
+      (post_attention_layernorm): RMSNorm(dim=1024, eps=1e-06)
+    )
+  )
+  (norm): RMSNorm(dim=1024, eps=1e-06)
+  (output): MixPrecisionLinear(in_features=1024, out_features=201088, bias=False)
+)
+Warning: can not get the class path of method <built-in method parse_ir of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00de415430> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.parse_ir!
+Warning: can not get the class path of method <built-in method parse_schema of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00de415450> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.parse_schema!
+Warning: can not get the class path of method <built-in method unify_type_list of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00de4154b0> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.unify_type_list!
+Warning: can not get the class path of method <built-in method fork of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00de416130> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.fork!
+Warning: can not get the class path of method <built-in method wait of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00de416150> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.wait!
+Warning: can not get the class path of method <built-in method parse_type_comment of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00de43f8f0> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.parse_type_comment!
+Warning: can not get the class path of method <built-in method merge_type_from_type_comment of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00de43f990> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.merge_type_from_type_comment!
+Warning: can not get the class path of method <built-in method import_ir_module of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00de43fa70> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.import_ir_module!
+Warning: can not get the class path of method <built-in method import_ir_module_from_buffer of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00de43fab0> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.import_ir_module_from_buffer!
+Warning: can not get the class path of method <built-in method vitals_enabled of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00b2358830> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.vitals_enabled!
+Warning: can not get the class path of method <built-in method set_vital of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00b2358850> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.set_vital!
+Warning: can not get the class path of method <built-in method read_vitals of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00b2358870> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.read_vitals!
+Warning: can not get the class path of method <built-in method init_num_threads of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7d00b2358890> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.init_num_threads!
+2026-03-04 18:11:58 | INFO | nnscaler.graph.parser.converter | constant folding enabled to parse graph
+2026-03-04 18:12:02 | INFO | nnscaler.autodist.apis | AutoDistConfig {'pc_path': '', 'profile_dir': PosixPath('/home/yingbohao/.cache/nnscaler/autodist/1.0/NVIDIA_B200'), 'topk': 20, 'task_name': '__1gpus_2update_freq', 'load_plan_path': None, 'save_plan_path': None, 'consider_mem': True, 'zero_stage': 1, 'zero_ngroups': 1, 'opt_resident_coef': 2, 'opt_transient_coef': 0, 'is_train': True, 'mesh_desc': MeshDesc(row=1, col=1), 'recompute_modules': '', 'recompute_ratio': 1.0, 'memory_constraint': 144955146240, 'memory_granularity': 524288, 'micro_batch_size': 1, 'update_freq': 2, 'world_size': 4, 'nproc': 1, 'ignore_small_tensor_threshold': 524288, 'verbose': False, 're_profile': False, 'pipeline_pivots': '', 'pipeline_nstages': 1, 'pipeline_scheduler': '1f1b', 'max_pipeline_bubble_ratio': 0.2, 'max_pipeline_unbalance_ratio': 0.5, 'solver': 'dp', 'parallel_profile': True, 'transient_mem_coef': 2, 'disable_shared_param_constraint': True}
+2026-03-04 18:12:02 | WARNING | nnscaler.autodist.cost_database | Communication profile data not found, using default data at /tmp/nnscaler/nnscaler/resources/profile/mi200/comm
+2026-03-04 18:12:02 | INFO | nnscaler.autodist.cost_database | Profiling in parallel
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 149, in forward,  tokens, context, targets = samples['tokens'], samples['context'], samples['targets'] that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 149, in forward,  tokens, context, targets = samples['tokens'], samples['context'], samples['targets'] that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 111, in forward,  xq, xk = self.rope(context['positions'], xq, xk) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | WARNING | nnscaler.autodist.model_graph | detect a non-IRDimops _operator.getitem at File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute) that produces tensors
+2026-03-04 18:12:26 | INFO | nnscaler.autodist.model_graph | 
+-------------------------nnScaler Graph Profiling Result-------------------------
+
+depth 1
+    param_mem - [('model, Model', '1889.69 MB'), ('kernel.vocab_parallel_cross_entropy.inner_chunk_linear_cross_entropy', '785.50 MB'), ('_operator.getitem', '0.00 MB')]
+    fw_span - [('model, Model', '53.53 ms'), ('kernel.vocab_parallel_cross_entropy.inner_chunk_linear_cross_entropy', '12.04 ms'), ('_operator.getitem', '0.00 ms')]
+    train_mem - [('model, Model', '6919.20 MB'), ('kernel.vocab_parallel_cross_entropy.inner_chunk_linear_cross_entropy', '787.51 MB'), ('_operator.getitem', '0.00 MB')]
+    buffer_mem - [('model, Model', '1.00 MB'), ('_operator.getitem', '0.00 MB'), ('_operator.getitem', '0.00 MB')]
+depth 2
+    param_mem - [('tok_embeddings, Embedding', '785.50 MB'), ('0, Block', '46.01 MB'), ('1, Block', '46.01 MB')]
+    fw_span - [('0, Block', '2.22 ms'), ('1, Block', '2.22 ms'), ('2, Block', '2.22 ms')]
+    train_mem - [('0, Block', '287.63 MB'), ('1, Block', '287.63 MB'), ('2, Block', '287.63 MB')]
+    buffer_mem - [('0, Block', '1.00 MB'), ('1, Block', '1.00 MB'), ('2, Block', '1.00 MB')]
+depth 3
+    param_mem - [('nnscaler.runtime.function.embedding', '785.50 MB'), ('mlp, FeedForwardNetwork', '36.00 MB'), ('mlp, FeedForwardNetwork', '36.00 MB')]
+    fw_span - [('self_attn, Attention', '1.07 ms'), ('self_attn, Attention', '1.07 ms'), ('self_attn, Attention', '1.07 ms')]
+    train_mem - [('mlp, FeedForwardNetwork', '178.00 MB'), ('mlp, FeedForwardNetwork', '178.00 MB'), ('mlp, FeedForwardNetwork', '178.00 MB')]
+    buffer_mem - [('self_attn, Attention', '1.00 MB'), ('self_attn, Attention', '1.00 MB'), ('self_attn, Attention', '1.00 MB')]
+depth 4
+    param_mem - [('up_proj, MixPrecisionLinear', '12.00 MB'), ('gate_proj, MixPrecisionLinear', '12.00 MB'), ('down_proj, MixPrecisionLinear', '12.00 MB')]
+    fw_span - [('nnscaler.customized_ops.ring_attention.ring_attn_varlen.wrap_ring_attn_varlen_func', '0.58 ms'), ('nnscaler.customized_ops.ring_attention.ring_attn_varlen.wrap_ring_attn_varlen_func', '0.58 ms'), ('nnscaler.customized_ops.ring_attention.ring_attn_varlen.wrap_ring_attn_varlen_func', '0.58 ms')]
+    train_mem - [('arch.ffn.swiglu', '96.00 MB'), ('arch.ffn.swiglu', '96.00 MB'), ('arch.ffn.swiglu', '96.00 MB')]
+    buffer_mem - [('rope, RotaryEmbedding', '1.00 MB'), ('rope, RotaryEmbedding', '1.00 MB'), ('rope, RotaryEmbedding', '1.00 MB')]
+depth 5
+    param_mem - [('arch.linear.mix_precision_linear', '12.00 MB'), ('arch.linear.mix_precision_linear', '12.00 MB'), ('arch.linear.mix_precision_linear', '12.00 MB')]
+    fw_span - [('arch.linear.mix_precision_linear', '0.16 ms'), ('arch.linear.mix_precision_linear', '0.16 ms'), ('arch.linear.mix_precision_linear', '0.16 ms')]
+    train_mem - [('arch.linear.mix_precision_linear', '54.00 MB'), ('arch.linear.mix_precision_linear', '54.00 MB'), ('arch.linear.mix_precision_linear', '54.00 MB')]
+    buffer_mem - [('arch.rotary_embedding.rotary_embedding_func', '1.00 MB'), ('arch.rotary_embedding.rotary_embedding_func', '1.00 MB'), ('arch.rotary_embedding.rotary_embedding_func', '1.00 MB')]
+
+2026-03-04 18:12:26 | INFO | nnscaler.autodist.apis | param mem 2675 MB, buff mem 1 MB, activation mem 7703 MB
+2026-03-04 18:12:26 | INFO | nnscaler.autodist.apis | estimated minimum memory per device 14392.0 MB
+2026-03-04 18:12:26 | INFO | nnscaler.autodist.spmd_solver | no partition constraint is loaded
+2026-03-04 18:12:26 | INFO | nnscaler.autodist.cost_database | Profiling in parallel
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+2026-03-04 18:12:49 | INFO | nnscaler.autodist.spmd_solver | force_replica_threshold is 8388608
+2026-03-04 18:12:49 | INFO | nnscaler.autodist.spmd_solver | finish building op partitions
+2026-03-04 18:12:49 | INFO | nnscaler.autodist.spmd_solver | finish building following relationships
+2026-03-04 18:12:49 | INFO | nnscaler.autodist.spmd_solver | finish filtering useless partitions
+2026-03-04 18:12:49 | INFO | nnscaler.autodist.spmd_solver | total state num is 559
+2026-03-04 18:12:49 | INFO | nnscaler.autodist.spmd_solver | finish spmd solver initializetion
+2026-03-04 18:12:49 | INFO | nnscaler.autodist.apis | use plan with e2e time/s 359.33ms
+2026-03-04 18:12:49 | INFO | nnscaler.autodist.apis | 
+autodist plan analysis for stage 0 on devices [0] with mem 18.75 GB:
+
+Total computation time: 359.33 ms
+Top 10 of operators that consume the most computation time:
+    kernel.vocab_parallel_cross_entropy.inner_chunk_linear_cross_entropy: 94.38 ms
+    nnscaler.customized_ops.ring_attention.ring_attn_varlen.wrap_ring_attn_varlen_func: 90.91 ms
+    arch.linear.mix_precision_linear: 59.73 ms
+    arch.rms_norm.rms_norm_func: 29.09 ms
+    torch.Tensor.reshape: 21.72 ms
+    arch.ffn.swiglu: 16.70 ms
+    torch.add: 16.11 ms
+    torch.Tensor.float: 15.62 ms
+    arch.rotary_embedding.rotary_embedding_func: 13.54 ms
+    nnscaler.runtime.function.embedding: 1.53 ms
+Top 10 of operators computation time sum: 359.33 ms
+
+Top 2 operators split info:
+    kernel.vocab_parallel_cross_entropy.inner_chunk_linear_cross_entropy:
+        FwOp562-()(name=inner_chunk_linear_cross_entropy, inputs=(t2777(p1946,(8192, 1024),d(),v(0/1)), w2778(p1948,(201088, 1024),d(),v(0/1)), t1979(p19,(8192,),d(),v(0/1))), outputs=(t1976(p1950,(8192,),d(),v(0/1)), t1977(p1952,(8192,),d(),v(0/1))))
+        File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 155, in forward,  losses, z_losses = inner_chunk_linear_cross_entropy(hidden_states, self.model.output.weight, targets, self.xentropy_chunk_size, self.xentropy_recompute)
+        l d^, n^ d^, l -> l, l, OpPartition((-1,), (1,)), comp_time: 94.38 ms, comm_time: 0.00 ms
+
+
+    nnscaler.customized_ops.ring_attention.ring_attn_varlen.wrap_ring_attn_varlen_func:
+        FwOp19-()(name=wrap_ring_attn_varlen_func, inputs=(t1996(p70,(8192, 16, 64),d(),v(0/1)), t1997(p72,(8192, 4, 64),d(),v(0/1)), t1993(p66,(8192, 4, 64),d(),v(0/1)), t1998(p78,(3,),d(),v(0/1)), t1999(p79,(3,),d(),v(0/1)), None), outputs=(t2000(p83,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp43-()(name=wrap_ring_attn_varlen_func, inputs=(t2029(p159,(8192, 16, 64),d(),v(0/1)), t2030(p161,(8192, 4, 64),d(),v(0/1)), t2027(p155,(8192, 4, 64),d(),v(0/1)), t2031(p167,(3,),d(),v(0/1)), t2032(p168,(3,),d(),v(0/1)), None), outputs=(t2033(p172,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp66-()(name=wrap_ring_attn_varlen_func, inputs=(t2062(p238,(8192, 16, 64),d(),v(0/1)), t2063(p240,(8192, 4, 64),d(),v(0/1)), t2060(p234,(8192, 4, 64),d(),v(0/1)), t2064(p246,(3,),d(),v(0/1)), t2065(p247,(3,),d(),v(0/1)), None), outputs=(t2066(p251,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp89-()(name=wrap_ring_attn_varlen_func, inputs=(t2095(p317,(8192, 16, 64),d(),v(0/1)), t2096(p319,(8192, 4, 64),d(),v(0/1)), t2093(p313,(8192, 4, 64),d(),v(0/1)), t2097(p325,(3,),d(),v(0/1)), t2098(p326,(3,),d(),v(0/1)), None), outputs=(t2099(p330,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp112-()(name=wrap_ring_attn_varlen_func, inputs=(t2128(p396,(8192, 16, 64),d(),v(0/1)), t2129(p398,(8192, 4, 64),d(),v(0/1)), t2126(p392,(8192, 4, 64),d(),v(0/1)), t2130(p404,(3,),d(),v(0/1)), t2131(p405,(3,),d(),v(0/1)), None), outputs=(t2132(p409,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp135-()(name=wrap_ring_attn_varlen_func, inputs=(t2161(p475,(8192, 16, 64),d(),v(0/1)), t2162(p477,(8192, 4, 64),d(),v(0/1)), t2159(p471,(8192, 4, 64),d(),v(0/1)), t2163(p483,(3,),d(),v(0/1)), t2164(p484,(3,),d(),v(0/1)), None), outputs=(t2165(p488,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp158-()(name=wrap_ring_attn_varlen_func, inputs=(t2194(p554,(8192, 16, 64),d(),v(0/1)), t2195(p556,(8192, 4, 64),d(),v(0/1)), t2192(p550,(8192, 4, 64),d(),v(0/1)), t2196(p562,(3,),d(),v(0/1)), t2197(p563,(3,),d(),v(0/1)), None), outputs=(t2198(p567,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp181-()(name=wrap_ring_attn_varlen_func, inputs=(t2227(p633,(8192, 16, 64),d(),v(0/1)), t2228(p635,(8192, 4, 64),d(),v(0/1)), t2225(p629,(8192, 4, 64),d(),v(0/1)), t2229(p641,(3,),d(),v(0/1)), t2230(p642,(3,),d(),v(0/1)), None), outputs=(t2231(p646,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp204-()(name=wrap_ring_attn_varlen_func, inputs=(t2260(p712,(8192, 16, 64),d(),v(0/1)), t2261(p714,(8192, 4, 64),d(),v(0/1)), t2258(p708,(8192, 4, 64),d(),v(0/1)), t2262(p720,(3,),d(),v(0/1)), t2263(p721,(3,),d(),v(0/1)), None), outputs=(t2264(p725,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp227-()(name=wrap_ring_attn_varlen_func, inputs=(t2293(p791,(8192, 16, 64),d(),v(0/1)), t2294(p793,(8192, 4, 64),d(),v(0/1)), t2291(p787,(8192, 4, 64),d(),v(0/1)), t2295(p799,(3,),d(),v(0/1)), t2296(p800,(3,),d(),v(0/1)), None), outputs=(t2297(p804,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp250-()(name=wrap_ring_attn_varlen_func, inputs=(t2326(p870,(8192, 16, 64),d(),v(0/1)), t2327(p872,(8192, 4, 64),d(),v(0/1)), t2324(p866,(8192, 4, 64),d(),v(0/1)), t2328(p878,(3,),d(),v(0/1)), t2329(p879,(3,),d(),v(0/1)), None), outputs=(t2330(p883,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp273-()(name=wrap_ring_attn_varlen_func, inputs=(t2359(p949,(8192, 16, 64),d(),v(0/1)), t2360(p951,(8192, 4, 64),d(),v(0/1)), t2357(p945,(8192, 4, 64),d(),v(0/1)), t2361(p957,(3,),d(),v(0/1)), t2362(p958,(3,),d(),v(0/1)), None), outputs=(t2363(p962,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp296-()(name=wrap_ring_attn_varlen_func, inputs=(t2392(p1028,(8192, 16, 64),d(),v(0/1)), t2393(p1030,(8192, 4, 64),d(),v(0/1)), t2390(p1024,(8192, 4, 64),d(),v(0/1)), t2394(p1036,(3,),d(),v(0/1)), t2395(p1037,(3,),d(),v(0/1)), None), outputs=(t2396(p1041,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp319-()(name=wrap_ring_attn_varlen_func, inputs=(t2425(p1107,(8192, 16, 64),d(),v(0/1)), t2426(p1109,(8192, 4, 64),d(),v(0/1)), t2423(p1103,(8192, 4, 64),d(),v(0/1)), t2427(p1115,(3,),d(),v(0/1)), t2428(p1116,(3,),d(),v(0/1)), None), outputs=(t2429(p1120,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp342-()(name=wrap_ring_attn_varlen_func, inputs=(t2458(p1186,(8192, 16, 64),d(),v(0/1)), t2459(p1188,(8192, 4, 64),d(),v(0/1)), t2456(p1182,(8192, 4, 64),d(),v(0/1)), t2460(p1194,(3,),d(),v(0/1)), t2461(p1195,(3,),d(),v(0/1)), None), outputs=(t2462(p1199,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp365-()(name=wrap_ring_attn_varlen_func, inputs=(t2491(p1265,(8192, 16, 64),d(),v(0/1)), t2492(p1267,(8192, 4, 64),d(),v(0/1)), t2489(p1261,(8192, 4, 64),d(),v(0/1)), t2493(p1273,(3,),d(),v(0/1)), t2494(p1274,(3,),d(),v(0/1)), None), outputs=(t2495(p1278,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp388-()(name=wrap_ring_attn_varlen_func, inputs=(t2524(p1344,(8192, 16, 64),d(),v(0/1)), t2525(p1346,(8192, 4, 64),d(),v(0/1)), t2522(p1340,(8192, 4, 64),d(),v(0/1)), t2526(p1352,(3,),d(),v(0/1)), t2527(p1353,(3,),d(),v(0/1)), None), outputs=(t2528(p1357,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp411-()(name=wrap_ring_attn_varlen_func, inputs=(t2557(p1423,(8192, 16, 64),d(),v(0/1)), t2558(p1425,(8192, 4, 64),d(),v(0/1)), t2555(p1419,(8192, 4, 64),d(),v(0/1)), t2559(p1431,(3,),d(),v(0/1)), t2560(p1432,(3,),d(),v(0/1)), None), outputs=(t2561(p1436,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp434-()(name=wrap_ring_attn_varlen_func, inputs=(t2590(p1502,(8192, 16, 64),d(),v(0/1)), t2591(p1504,(8192, 4, 64),d(),v(0/1)), t2588(p1498,(8192, 4, 64),d(),v(0/1)), t2592(p1510,(3,),d(),v(0/1)), t2593(p1511,(3,),d(),v(0/1)), None), outputs=(t2594(p1515,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp457-()(name=wrap_ring_attn_varlen_func, inputs=(t2623(p1581,(8192, 16, 64),d(),v(0/1)), t2624(p1583,(8192, 4, 64),d(),v(0/1)), t2621(p1577,(8192, 4, 64),d(),v(0/1)), t2625(p1589,(3,),d(),v(0/1)), t2626(p1590,(3,),d(),v(0/1)), None), outputs=(t2627(p1594,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp480-()(name=wrap_ring_attn_varlen_func, inputs=(t2656(p1660,(8192, 16, 64),d(),v(0/1)), t2657(p1662,(8192, 4, 64),d(),v(0/1)), t2654(p1656,(8192, 4, 64),d(),v(0/1)), t2658(p1668,(3,),d(),v(0/1)), t2659(p1669,(3,),d(),v(0/1)), None), outputs=(t2660(p1673,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp503-()(name=wrap_ring_attn_varlen_func, inputs=(t2689(p1739,(8192, 16, 64),d(),v(0/1)), t2690(p1741,(8192, 4, 64),d(),v(0/1)), t2687(p1735,(8192, 4, 64),d(),v(0/1)), t2691(p1747,(3,),d(),v(0/1)), t2692(p1748,(3,),d(),v(0/1)), None), outputs=(t2693(p1752,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp526-()(name=wrap_ring_attn_varlen_func, inputs=(t2722(p1818,(8192, 16, 64),d(),v(0/1)), t2723(p1820,(8192, 4, 64),d(),v(0/1)), t2720(p1814,(8192, 4, 64),d(),v(0/1)), t2724(p1826,(3,),d(),v(0/1)), t2725(p1827,(3,),d(),v(0/1)), None), outputs=(t2726(p1831,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+        FwOp549-()(name=wrap_ring_attn_varlen_func, inputs=(t2755(p1897,(8192, 16, 64),d(),v(0/1)), t2756(p1899,(8192, 4, 64),d(),v(0/1)), t2753(p1893,(8192, 4, 64),d(),v(0/1)), t2757(p1905,(3,),d(),v(0/1)), t2758(p1906,(3,),d(),v(0/1)), None), outputs=(t2759(p1910,(8192, 16, 64),d(),v(0/1)),))
+        File "/home/yingbohao/llm-train/llm/arch/attention.py", line 135, in forward,  output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        l (group_num 4^) hd^, l group_num hd^, l group_num vd^, e^, e^, ?^ -> l (group_num 4^) vd^, OpPartition((-1,), (1,)), comp_time: 3.79 ms, comm_time: 0.00 ms
+
+
+Total communication time: 0.00 ms
+Top 10 operators that consume the most communication time:
+Top 10 of operators communication time sum: 0.00 ms
+
+Module analysis:
+Depth 1:
+    Top 3 modules that consume the most computation time:
+        model, Model: 264.95 ms
+    Top 3 modules that consume the most communication time:
+        model, Model: 0.00 ms
+    Top 3 modules that consume the most memory:
+        model, Model: {'total_cost (MB)': 13817, 'resident_mem (MB)': 11640, 'activation_mem (MB)': 6916, 'opt_transient_mem (MB)': 0, 'recompute_mem (MB)': 0, 'transient_mem (MB)': 2177}
+Depth 2:
+    Top 3 modules that consume the most computation time:
+        0, Block: 10.94 ms
+        1, Block: 10.94 ms
+        2, Block: 10.94 ms
+    Top 3 modules that consume the most communication time:
+        0, Block: 0.00 ms
+        1, Block: 0.00 ms
+        2, Block: 0.00 ms
+    Top 3 modules that consume the most memory:
+        0, Block: {'total_cost (MB)': 1280, 'resident_mem (MB)': 403, 'activation_mem (MB)': 287, 'opt_transient_mem (MB)': 0, 'recompute_mem (MB)': 0, 'transient_mem (MB)': 877}
+        1, Block: {'total_cost (MB)': 1279, 'resident_mem (MB)': 402, 'activation_mem (MB)': 287, 'opt_transient_mem (MB)': 0, 'recompute_mem (MB)': 0, 'transient_mem (MB)': 877}
+        2, Block: {'total_cost (MB)': 1279, 'resident_mem (MB)': 402, 'activation_mem (MB)': 287, 'opt_transient_mem (MB)': 0, 'recompute_mem (MB)': 0, 'transient_mem (MB)': 877}
+Depth 3:
+    Top 3 modules that consume the most computation time:
+        self_attn, Attention: 6.49 ms
+        self_attn, Attention: 6.49 ms
+        self_attn, Attention: 6.49 ms
+    Top 3 modules that consume the most communication time:
+        self_attn, Attention: 0.00 ms
+        self_attn, Attention: 0.00 ms
+        self_attn, Attention: 0.00 ms
+    Top 3 modules that consume the most memory:
+        mlp, FeedForwardNetwork: {'total_cost (MB)': 973, 'resident_mem (MB)': 268, 'activation_mem (MB)': 178, 'opt_transient_mem (MB)': 0, 'recompute_mem (MB)': 0, 'transient_mem (MB)': 705}
+        mlp, FeedForwardNetwork: {'total_cost (MB)': 973, 'resident_mem (MB)': 268, 'activation_mem (MB)': 178, 'opt_transient_mem (MB)': 0, 'recompute_mem (MB)': 0, 'transient_mem (MB)': 705}
+        mlp, FeedForwardNetwork: {'total_cost (MB)': 973, 'resident_mem (MB)': 268, 'activation_mem (MB)': 178, 'opt_transient_mem (MB)': 0, 'recompute_mem (MB)': 0, 'transient_mem (MB)': 705}
+Depth 4:
+    Top 3 modules that consume the most computation time:
+    Top 3 modules that consume the most communication time:
+    Top 3 modules that consume the most memory:
+
+2026-03-04 18:12:49 | INFO | nnscaler.graph.gener.gen | finish reordering producer and consumer
+2026-03-04 18:12:49 | INFO | nnscaler.graph.gener.gen | finish removing anchor nodes
+2026-03-04 18:12:49 | INFO | nnscaler.graph.gener.gen | finish replacing auto pyfunc
+2026-03-04 18:12:49 | INFO | nnscaler.graph.gener.gen | finish transforming multiref nodes
+2026-03-04 18:12:49 | INFO | nnscaler.graph.gener.gen | processed local fusion & multiref for 100 tensors
+2026-03-04 18:12:49 | INFO | nnscaler.graph.gener.gen | processed local fusion & multiref for 200 tensors
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | processed local fusion & multiref for 300 tensors
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | processed local fusion & multiref for 400 tensors
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | processed local fusion & multiref for 500 tensors
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | finish local fusion & multiref for 584 tensors
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | finish reordering producer and consumer
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | generated 100 activation adapters
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | generated 200 activation adapters
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | generated 300 activation adapters
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | generated 400 activation adapters
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | generated 500 activation adapters
+2026-03-04 18:12:50 | INFO | nnscaler.graph.gener.gen | finish generating 584 activation adapters
+2026-03-04 18:12:50 | INFO | nnscaler.execplan.planpass.fusion | adapter fusion: successfully fuse 0 differentiable adapters
+/usr/local/lib/python3.12/dist-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/tmp/nnscaler/nnscaler/parallel.py", line 1082, in parallelize
+[rank0]:     regen_status = _gencode(
+[rank0]:                    ^^^^^^^^^
+[rank0]:   File "/tmp/nnscaler/nnscaler/parallel.py", line 877, in _gencode
+[rank0]:     mgener.gen(rank,
+[rank0]:   File "/tmp/nnscaler/nnscaler/codegen/module/module.py", line 509, in gen
+[rank0]:     with open(outfile_attr_meta_map, 'wb') as f:
+[rank0]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: FileNotFoundError: [Errno 2] No such file or directory: '/home/yingbohao/llm-train/llm/.nnscaler/_parallel_modules/__main__/BackBone/Base-0_4B-baseline/attr_meta0.pkl'
+
+[rank0]: The above exception was the direct cause of the following exception:
+
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 1030, in <module>
+[rank0]:     main(model_args, data_args, trainer_args, args)
+[rank0]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 1015, in main
+[rank0]:     trainer.run()
+[rank0]:   File "/tmp/nnscaler/nnscaler/cli/trainer.py", line 101, in run
+[rank0]:     self._setup()
+[rank0]:   File "/tmp/nnscaler/nnscaler/cli/trainer.py", line 142, in _setup
+[rank0]:     pmodel = parallelize_model(
+[rank0]:              ^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 375, in parallelize_model
+[rank0]:     model = trainer_args.to_precision(trainer_args.create_model())
+[rank0]:                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/nnscaler/nnscaler/cli/trainer_args.py", line 948, in create_model
+[rank0]:     return self.model_type(**kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 163, in __init__
+[rank0]:     self.backbone = BackBone(model_args, xentropy_chunk_size, xentropy_recompute, precision)
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 369, in __parallel__new__
+[rank0]:     return adapter.parallelize(dummy_input, load_module=load_module, build_buckets=build_buckets, module_args=(args, kwargs))
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 214, in parallelize
+[rank0]:     pmodel_class = nnscaler.parallelize(
+[rank0]:                    ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/nnscaler/nnscaler/parallel.py", line 1125, in parallelize
+[rank0]:     raise RuntimeError("Code generation failed.") from regen_exception
+[rank0]: RuntimeError: Code generation failed.
+[rank2]: Traceback (most recent call last):
+[rank2]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 1030, in <module>
+[rank2]:     main(model_args, data_args, trainer_args, args)
+[rank2]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 1015, in main
+[rank2]:     trainer.run()
+[rank2]:   File "/tmp/nnscaler/nnscaler/cli/trainer.py", line 101, in run
+[rank2]:     self._setup()
+[rank2]:   File "/tmp/nnscaler/nnscaler/cli/trainer.py", line 142, in _setup
+[rank2]:     pmodel = parallelize_model(
+[rank2]:              ^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 375, in parallelize_model
+[rank2]:     model = trainer_args.to_precision(trainer_args.create_model())
+[rank2]:                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/tmp/nnscaler/nnscaler/cli/trainer_args.py", line 948, in create_model
+[rank2]:     return self.model_type(**kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 163, in __init__
+[rank2]:     self.backbone = BackBone(model_args, xentropy_chunk_size, xentropy_recompute, precision)
+[rank2]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 369, in __parallel__new__
+[rank2]:     return adapter.parallelize(dummy_input, load_module=load_module, build_buckets=build_buckets, module_args=(args, kwargs))
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 214, in parallelize
+[rank2]:     pmodel_class = nnscaler.parallelize(
+[rank2]:                    ^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/tmp/nnscaler/nnscaler/parallel.py", line 1125, in parallelize
+[rank2]:     raise RuntimeError("Code generation failed.") from regen_exception
+[rank2]: RuntimeError: Code generation failed.
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 1030, in <module>
+[rank1]:     main(model_args, data_args, trainer_args, args)
+[rank1]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 1015, in main
+[rank1]:     trainer.run()
+[rank1]:   File "/tmp/nnscaler/nnscaler/cli/trainer.py", line 101, in run
+[rank1]:     self._setup()
+[rank1]:   File "/tmp/nnscaler/nnscaler/cli/trainer.py", line 142, in _setup
+[rank1]:     pmodel = parallelize_model(
+[rank1]:              ^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 375, in parallelize_model
+[rank1]:     model = trainer_args.to_precision(trainer_args.create_model())
+[rank1]:                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/tmp/nnscaler/nnscaler/cli/trainer_args.py", line 948, in create_model
+[rank1]:     return self.model_type(**kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 163, in __init__
+[rank1]:     self.backbone = BackBone(model_args, xentropy_chunk_size, xentropy_recompute, precision)
+[rank1]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 369, in __parallel__new__
+[rank1]:     return adapter.parallelize(dummy_input, load_module=load_module, build_buckets=build_buckets, module_args=(args, kwargs))
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 214, in parallelize
+[rank1]:     pmodel_class = nnscaler.parallelize(
+[rank1]:                    ^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/tmp/nnscaler/nnscaler/parallel.py", line 1125, in parallelize
+[rank1]:     raise RuntimeError("Code generation failed.") from regen_exception
+[rank1]: RuntimeError: Code generation failed.
+[rank3]: Traceback (most recent call last):
+[rank3]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 1030, in <module>
+[rank3]:     main(model_args, data_args, trainer_args, args)
+[rank3]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 1015, in main
+[rank3]:     trainer.run()
+[rank3]:   File "/tmp/nnscaler/nnscaler/cli/trainer.py", line 101, in run
+[rank3]:     self._setup()
+[rank3]:   File "/tmp/nnscaler/nnscaler/cli/trainer.py", line 142, in _setup
+[rank3]:     pmodel = parallelize_model(
+[rank3]:              ^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 375, in parallelize_model
+[rank3]:     model = trainer_args.to_precision(trainer_args.create_model())
+[rank3]:                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/nnscaler/nnscaler/cli/trainer_args.py", line 948, in create_model
+[rank3]:     return self.model_type(**kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yingbohao/llm-train/llm/nnscaler_train.py", line 163, in __init__
+[rank3]:     self.backbone = BackBone(model_args, xentropy_chunk_size, xentropy_recompute, precision)
+[rank3]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 369, in __parallel__new__
+[rank3]:     return adapter.parallelize(dummy_input, load_module=load_module, build_buckets=build_buckets, module_args=(args, kwargs))
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/nnscaler/nnscaler/cli/mixed_module.py", line 214, in parallelize
+[rank3]:     pmodel_class = nnscaler.parallelize(
+[rank3]:                    ^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/nnscaler/nnscaler/parallel.py", line 1125, in parallelize
+[rank3]:     raise RuntimeError("Code generation failed.") from regen_exception
+[rank3]: RuntimeError: Code generation failed.
+[rank0]:[W304 18:12:51.316645951 ProcessGroupNCCL.cpp:1553] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+W0304 18:12:51.803000 2494075 torch/distributed/elastic/multiprocessing/api.py:1010] Sending process 2494179 closing signal SIGTERM
+W0304 18:12:51.804000 2494075 torch/distributed/elastic/multiprocessing/api.py:1010] Sending process 2494180 closing signal SIGTERM
+W0304 18:12:51.804000 2494075 torch/distributed/elastic/multiprocessing/api.py:1010] Sending process 2494181 closing signal SIGTERM
+E0304 18:12:52.470000 2494075 torch/distributed/elastic/multiprocessing/api.py:984] failed (exitcode: 1) local_rank: 3 (pid: 2494182) of binary: /usr/bin/python
+Traceback (most recent call last):
+  File "/usr/local/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 362, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 992, in main
+    run(args)
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/run.py", line 983, in run
+    elastic_launch(
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 170, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/distributed/launcher/api.py", line 317, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+nnscaler_train.py FAILED
+------------------------------------------------------------
+Failures:
+[1]:
+  time      : 2026-03-04_18:12:52
+  host      : sure-starfish-b200g4-dev-a3283cf5-master-0.sure-starfish-b200g4-dev-a3283cf5.bonete01.svc.cluster.local
+  rank      : 0 (local_rank: 0)
+  exitcode  : -15 (pid: 2494179)
+  error_file: <N/A>
+  traceback : Signal 15 (SIGTERM) received by PID 2494179
+[2]:
+  time      : 2026-03-04_18:12:52
+  host      : sure-starfish-b200g4-dev-a3283cf5-master-0.sure-starfish-b200g4-dev-a3283cf5.bonete01.svc.cluster.local
+  rank      : 1 (local_rank: 1)
+  exitcode  : 1 (pid: 2494180)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+[3]:
+  time      : 2026-03-04_18:12:52
+  host      : sure-starfish-b200g4-dev-a3283cf5-master-0.sure-starfish-b200g4-dev-a3283cf5.bonete01.svc.cluster.local
+  rank      : 2 (local_rank: 2)
+  exitcode  : 1 (pid: 2494181)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-03-04_18:12:51
+  host      : sure-starfish-b200g4-dev-a3283cf5-master-0.sure-starfish-b200g4-dev-a3283cf5.bonete01.svc.cluster.local
+  rank      : 3 (local_rank: 3)
+  exitcode  : 1 (pid: 2494182)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
+[2026-03-04 18:12:59] torchrun exited early with code: 1
+[2026-03-04 18:12:59] Cleaning up processes for Base-0_4B-baseline...
+[2026-03-04 18:13:04] Cleanup done for Base-0_4B-baseline
+Result: FAILED (exit code 1)
+End: 2026-03-04 18:13:04
+GPU processes after cleanup: 4
+WARNING: GPU not fully released, force killing...
+
+[2/3] Base-0.4B nvfp4
+Start: 2026-03-04 18:13:09
+[2026-03-04 18:13:09] Pre-cleanup: killing any leftover processes for Base-0_4B-nvfp4...
+[2026-03-04 18:13:11] Starting experiment: Base-0.4B-nvfp4
+[2026-03-04 18:13:11] Log file: /home/yingbohao/llm-train/logs/Base-0.4B-nvfp4.log
+[2026-03-04 18:13:11] torchrun PID: 2496870
+W0304 18:13:12.733000 2496870 torch/distributed/run.py:853] 
+W0304 18:13:12.733000 2496870 torch/distributed/run.py:853] *****************************************
+W0304 18:13:12.733000 2496870 torch/distributed/run.py:853] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0304 18:13:12.733000 2496870 torch/distributed/run.py:853] *****************************************
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+2026-03-04 18:13:20 | WARNING | nnscaler.cli.trainer_args | `last` checkpoint does not exist. Will train from scratch.
+2026-03-04 18:13:20 | WARNING | nnscaler.cli.trainer_args | `last` checkpoint does not exist. Will train from scratch.
+2026-03-04 18:13:20 | WARNING | nnscaler.cli.trainer_args | `last` checkpoint does not exist. Will train from scratch.
+2026-03-04 18:13:20 | WARNING | nnscaler.cli.trainer_args | `last` checkpoint does not exist. Will train from scratch.
+# of model parameters: 701.24M
+# of model parameters: 701.24M
+/usr/local/lib/python3.12/dist-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+# of model parameters: 701.24M
+# of model parameters: 701.24M
+2026-03-04 18:13:26 | INFO | arch.attention | Attention layer 0 is_self_layer: True, window_size: -1
+2026-03-04 18:13:26 | INFO | arch.attention | Attention layer 1 is_self_layer: True, window_size: -1
+2026-03-04 18:13:26 | INFO | arch.attention | Attention layer 2 is_self_layer: True, window_size: -1
+2026-03-04 18:13:26 | INFO | arch.attention | Attention layer 3 is_self_layer: True, window_size: -1
+2026-03-04 18:13:26 | INFO | arch.attention | Attention layer 4 is_self_layer: True, window_size: -1
+2026-03-04 18:13:26 | INFO | arch.attention | Attention layer 5 is_self_layer: True, window_size: -1
+2026-03-04 18:13:26 | INFO | arch.attention | Attention layer 6 is_self_layer: True, window_size: -1
+2026-03-04 18:13:26 | INFO | arch.attention | Attention layer 7 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 8 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 9 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 10 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 11 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 12 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 13 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 14 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 15 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 16 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 17 is_self_layer: True, window_size: -1
+2026-03-04 18:13:27 | INFO | arch.attention | Attention layer 18 is_self_layer: True, window_size: -1
+2026-03-04 18:13:28 | INFO | arch.attention | Attention layer 19 is_self_layer: True, window_size: -1
+2026-03-04 18:13:28 | INFO | arch.attention | Attention layer 20 is_self_layer: True, window_size: -1
+2026-03-04 18:13:28 | INFO | arch.attention | Attention layer 21 is_self_layer: True, window_size: -1
+2026-03-04 18:13:28 | INFO | arch.attention | Attention layer 22 is_self_layer: True, window_size: -1
+2026-03-04 18:13:28 | INFO | arch.attention | Attention layer 23 is_self_layer: True, window_size: -1
+2026-03-04 18:13:29 | INFO | __main__ | Model: Model(
+  (tok_embeddings): Embedding(201088, 1024)
+  (layers): ModuleList(
+    (0-23): 24 x Block(
+      (self_attn): Attention(
+        (rope): RotaryEmbedding(head_size=64, max_position_embeddings=4096, base=10000.0)
+        (q_proj): MixPrecisionLinear(in_features=1024, out_features=1024, bias=False)
+        (k_proj): MixPrecisionLinear(in_features=1024, out_features=256, bias=False)
+        (v_proj): MixPrecisionLinear(in_features=1024, out_features=256, bias=False)
+        (q_norm): Identity()
+        (k_norm): Identity()
+        (o_proj): MixPrecisionLinear(in_features=1024, out_features=1024, bias=False)
+      )
+      (mlp): FeedForwardNetwork(
+        (up_proj): MixPrecisionLinear(in_features=1024, out_features=3072, bias=False)
+        (down_proj): MixPrecisionLinear(in_features=3072, out_features=1024, bias=False)
+        (gate_proj): MixPrecisionLinear(in_features=1024, out_features=3072, bias=False)
+      )
+      (input_layernorm): RMSNorm(dim=1024, eps=1e-06)
+      (post_attention_layernorm): RMSNorm(dim=1024, eps=1e-06)
+    )
+  )
+  (norm): RMSNorm(dim=1024, eps=1e-06)
+  (output): MixPrecisionLinear(in_features=1024, out_features=201088, bias=False)
+)
+Warning: can not get the class path of method <built-in method parse_ir of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f3b56d430> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.parse_ir!
+Warning: can not get the class path of method <built-in method parse_schema of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f3b56d450> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.parse_schema!
+Warning: can not get the class path of method <built-in method unify_type_list of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f3b56d4b0> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.unify_type_list!
+Warning: can not get the class path of method <built-in method fork of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f3b56e130> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.fork!
+Warning: can not get the class path of method <built-in method wait of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f3b56e150> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.wait!
+Warning: can not get the class path of method <built-in method parse_type_comment of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f3b59f8f0> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.parse_type_comment!
+Warning: can not get the class path of method <built-in method merge_type_from_type_comment of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f3b59f990> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.merge_type_from_type_comment!
+Warning: can not get the class path of method <built-in method import_ir_module of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f3b59fa70> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.import_ir_module!
+Warning: can not get the class path of method <built-in method import_ir_module_from_buffer of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f3b59fab0> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.import_ir_module_from_buffer!
+Warning: can not get the class path of method <built-in method vitals_enabled of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f01794830> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.vitals_enabled!
+Warning: can not get the class path of method <built-in method set_vital of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f01794850> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.set_vital!
+Warning: can not get the class path of method <built-in method read_vitals of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f01794870> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.read_vitals!
+Warning: can not get the class path of method <built-in method init_num_threads of pybind11_builtins.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1 object at 0x7c4f01794890> pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.init_num_threads!
+2026-03-04 18:13:41 | INFO | nnscaler.graph.parser.converter | constant folding enabled to parse graph
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:41 | WARNING | nnscaler.graph.parser.parser | Find unknown custom autograd operation: kernel.nvfp4_quant.NvFP4FakeQuant.apply. You should register it with nnscaler.register_op
+2026-03-04 18:13:44 | INFO | nnscaler.autodist.apis | AutoDistConfig {'pc_path': '', 'profile_dir': PosixPath('/home/yingbohao/.cache/nnscaler/autodist/1.0/NVIDIA_B200'), 'topk': 20, 'task_name': '__1gpus_2update_freq', 'load_plan_path': None, 'save_plan_path': None, 'consider_mem': True, 'zero_stage': 1, 'zero_ngroups': 1, 'opt_resident_coef': 2, 'opt_transient_coef': 0, 'is_train': True, 'mesh_desc': MeshDesc(row=1, col=1), 'recompute_modules': '', 'recompute_ratio': 1.0, 'memory_constraint': 144955146240, 'memory_granularity': 524288, 'micro_batch_size': 1, 'update_freq': 2, 'world_size': 4, 'nproc': 1, 'ignore_small_tensor_threshold': 524288, 'verbose': False, 're_profile': False, 'pipeline_pivots': '', 'pipeline_nstages': 1, 'pipeline_scheduler': '1f1b', 'max_pipeline_bubble_ratio': 0.2, 'max_pipeline_unbalance_ratio': 0.5, 'solver': 'dp', 'parallel_profile': True, 'transient_mem_coef': 2, 'disable_shared_param_constraint': True}
+2026-03-04 18:13:44 | WARNING | nnscaler.autodist.cost_database | Communication profile data not found, using default data at /tmp/nnscaler/nnscaler/resources/profile/mi200/comm
+2026-03-04 18:13:44 | INFO | nnscaler.autodist.cost_database | Profiling in parallel
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'
+flash_attn.cute not available: No module named 'cutlass'

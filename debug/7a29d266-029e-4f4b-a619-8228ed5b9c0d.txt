@@ -1,0 +1,84 @@
+2026-03-04T08:07:59.367Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-04T08:07:59.367Z [DEBUG] MDM settings load completed in 1ms
+2026-03-04T08:07:59.385Z [DEBUG] [init] configureGlobalMTLS starting
+2026-03-04T08:07:59.385Z [DEBUG] [init] configureGlobalMTLS complete
+2026-03-04T08:07:59.385Z [DEBUG] [init] configureGlobalAgents starting
+2026-03-04T08:07:59.385Z [DEBUG] [init] configureGlobalAgents complete
+2026-03-04T08:07:59.391Z [DEBUG] Applying permission update: Adding 5 allow rule(s) to destination 'userSettings': ["WebFetch","WebSearch","Read","Glob","Grep"]
+2026-03-04T08:07:59.391Z [DEBUG] [STARTUP] Loading MCP configs...
+2026-03-04T08:07:59.394Z [DEBUG] [ToolSearch:optimistic] mode=tst-auto, ENABLE_TOOL_SEARCH=undefined, result=true
+2026-03-04T08:07:59.395Z [DEBUG] [STARTUP] Running setup()...
+2026-03-04T08:07:59.404Z [DEBUG] Loading skills from: managed=/etc/claude-code/.claude/skills, user=/home/yingbohao/.claude/skills, project=[]
+2026-03-04T08:07:59.404Z [DEBUG] Error log sink initialized
+2026-03-04T08:07:59.407Z [DEBUG] Loaded 0 unique skills (0 unconditional, 0 conditional, managed: 0, user: 0, project: 0, additional: 0, legacy commands: 0)
+2026-03-04T08:07:59.407Z [DEBUG] [STARTUP] setup() completed in 12ms
+2026-03-04T08:07:59.407Z [DEBUG] [STARTUP] Loading commands and agents...
+2026-03-04T08:07:59.415Z [DEBUG] installed_plugins.json doesn't exist, returning empty V2 object
+2026-03-04T08:07:59.415Z [DEBUG] Found 0 plugins (0 enabled, 0 disabled)
+2026-03-04T08:07:59.415Z [DEBUG] getPluginSkills: Processing 0 enabled plugins
+2026-03-04T08:07:59.415Z [DEBUG] Total plugin skills loaded: 0
+2026-03-04T08:07:59.415Z [DEBUG] Total plugin commands loaded: 0
+2026-03-04T08:07:59.415Z [DEBUG] Registered 0 hooks from 0 plugins
+2026-03-04T08:07:59.415Z [DEBUG] Total plugin agents loaded: 0
+2026-03-04T08:07:59.415Z [DEBUG] getSkills returning: 0 skill dir commands, 0 plugin skills, 5 bundled skills
+2026-03-04T08:07:59.416Z [DEBUG] [STARTUP] Commands and agents loaded in 9ms
+2026-03-04T08:07:59.421Z [DEBUG] [STARTUP] Running showSetupScreens()...
+2026-03-04T08:07:59.426Z [DEBUG] [keybindings] KeybindingSetup initialized with 104 bindings, 0 warnings
+2026-03-04T08:07:59.454Z [DEBUG] [keybindings] Skipping file watcher - user customization disabled
+2026-03-04T08:07:59.456Z [DEBUG] [Claude in Chrome] Extension not found in any browser
+2026-03-04T08:07:59.457Z [DEBUG] Git remote URL: https://github.com/msrallm/llm-train.git
+2026-03-04T08:07:59.457Z [DEBUG] Parsed repository: github.com/msrallm/llm-train from URL: https://github.com/msrallm/llm-train.git
+2026-03-04T08:08:01.052Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1717460.1772611681052
+2026-03-04T08:08:01.052Z [DEBUG] Preserving file permissions: 100600
+2026-03-04T08:08:01.052Z [DEBUG] Temp file written successfully, size: 4549 bytes
+2026-03-04T08:08:01.052Z [DEBUG] Applied original permissions to temp file
+2026-03-04T08:08:01.052Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1717460.1772611681052 to /home/yingbohao/.claude.json
+2026-03-04T08:08:01.053Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-04T08:08:01.091Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1717460.1772611681091
+2026-03-04T08:08:01.091Z [DEBUG] Preserving file permissions: 100600
+2026-03-04T08:08:01.091Z [DEBUG] Temp file written successfully, size: 4644 bytes
+2026-03-04T08:08:01.091Z [DEBUG] Applied original permissions to temp file
+2026-03-04T08:08:01.091Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1717460.1772611681091 to /home/yingbohao/.claude.json
+2026-03-04T08:08:01.091Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-04T08:08:01.091Z [DEBUG] Added /home/yingbohao/llm-train to tracked paths for repo msrallm/llm-train
+2026-03-04T08:08:01.092Z [DEBUG] [Perfetto] initializePerfettoTracing called, env value: undefined
+2026-03-04T08:08:01.092Z [DEBUG] [3P telemetry] isTelemetryEnabled=false (CLAUDE_CODE_ENABLE_TELEMETRY=undefined)
+2026-03-04T08:08:01.094Z [DEBUG] [STARTUP] showSetupScreens() completed in 1673ms
+2026-03-04T08:08:01.094Z [DEBUG] [LSP MANAGER] initializeLspServerManager() called
+2026-03-04T08:08:01.094Z [DEBUG] [LSP MANAGER] Created manager instance, state=pending
+2026-03-04T08:08:01.094Z [DEBUG] [LSP MANAGER] Starting async initialization (generation 1)
+2026-03-04T08:08:01.095Z [DEBUG] Total LSP servers loaded: 0
+2026-03-04T08:08:01.095Z [ERROR] Failed to fetch org fast mode status, defaulting to disabled: Error: No auth available
+2026-03-04T08:08:01.098Z [DEBUG] [STARTUP] MCP configs loaded in 1707ms
+2026-03-04T08:08:01.100Z [DEBUG] [LSP SERVER MANAGER] getAllLspServers returned 0 server(s)
+2026-03-04T08:08:01.100Z [DEBUG] LSP manager initialized with 0 servers
+2026-03-04T08:08:01.101Z [DEBUG] Getting matching hook commands for SessionStart with query: startup
+2026-03-04T08:08:01.101Z [DEBUG] Found 0 hook matchers in settings
+2026-03-04T08:08:01.101Z [DEBUG] Matched 0 unique hooks for query "startup" (0 before deduplication)
+2026-03-04T08:08:01.101Z [DEBUG] Initialized versioned plugins system with 0 plugins
+2026-03-04T08:08:01.101Z [DEBUG] LSP server manager initialized successfully
+2026-03-04T08:08:01.101Z [DEBUG] LSP notification handlers registered successfully for all 0 server(s)
+2026-03-04T08:08:01.102Z [DEBUG] [Reconnection] computeInitialTeamContext: No teammate context set (not a teammate)
+2026-03-04T08:08:01.102Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1717460.1772611681102
+2026-03-04T08:08:01.102Z [DEBUG] Preserving file permissions: 100600
+2026-03-04T08:08:01.102Z [DEBUG] Temp file written successfully, size: 4644 bytes
+2026-03-04T08:08:01.102Z [DEBUG] Applied original permissions to temp file
+2026-03-04T08:08:01.102Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1717460.1772611681102 to /home/yingbohao/.claude.json
+2026-03-04T08:08:01.102Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-04T08:08:01.240Z [DEBUG] [keybindings] KeybindingSetup initialized with 104 bindings, 0 warnings
+2026-03-04T08:08:01.242Z [DEBUG] Full reset (shrink->below): prevHeight=17, nextHeight=1, viewport=15
+2026-03-04T08:08:01.243Z [DEBUG] /resume: loading sessions for cwd=/home/yingbohao/llm-train/scripts, worktrees=[/home/yingbohao/llm-train]
+2026-03-04T08:08:01.243Z [DEBUG] [keybindings] Skipping file watcher - user customization disabled
+2026-03-04T08:08:01.246Z [DEBUG] /resume: found 0 session files on disk
+2026-03-04T08:08:01.264Z [DEBUG] Ripgrep first use test: PASSED (mode=builtin, path=/usr/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux/rg)
+2026-03-04T08:08:01.265Z [DEBUG] Watching for changes in setting files /home/yingbohao/.claude/settings.json...
+2026-03-04T08:08:01.277Z [DEBUG] Tool search disabled: ToolSearchTool is not available (may have been disallowed via disallowedTools).
+2026-03-04T08:08:01.279Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.63.307; cc_entrypoint=cli; cch=00000;
+2026-03-04T08:08:01.280Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-04T08:08:01.280Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-04T08:08:01.280Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 64000 to 32000
+2026-03-04T08:08:01.281Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-04T08:08:01.281Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 64000 to 32000
+2026-03-04T08:08:01.524Z [ERROR] API error (attempt 1/11): 400 400 {"error":{"message":"{\"error\":{\"message\":\"The requested model is not supported.\",\"code\":\"model_not_supported\",\"param\":\"model\",\"type\":\"invalid_request_error\"}}\n","type":"error"}}
+2026-03-04T08:08:01.539Z [ERROR] Error in API request: 400 {"error":{"message":"{\"error\":{\"message\":\"The requested model is not supported.\",\"code\":\"model_not_supported\",\"param\":\"model\",\"type\":\"invalid_request_error\"}}\n","type":"error"}}
+2026-03-04T08:08:01.539Z [WARN] [3P telemetry] Event dropped (no event logger initialized): api_error

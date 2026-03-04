@@ -1,0 +1,96 @@
+   940→        # if model_args.moe:
+   941→            # for key in ['moe_routing', 'block_out']:
+   942→        for key in ['block_out',]:
+   943→            trainer.diagnostic_stats[key] = dict()
+   944→            assert key in global_inner_stats[0], f'key {key} not in inner stats'
+   945→            content = global_inner_stats[0][key]
+   946→            assert len(content) % args.update_freq == 0, f'activation stats length {len(content)} is not divisible by update_freq {args.update_freq}'
+   947→            layer_num = len(content) // args.update_freq
+   948→            for idx, layer_stats in enumerate(content):
+   949→                if idx // layer_num > 0:
+   950→                    break
+   951→                _logger.info(f'Activation stats, layer {idx % layer_num}: {layer_stats}')
+   952→                if key == 'block_out':
+   953→                    for name_stat, v in layer_stats.items():
+   954→                        trainer.diagnostic_stats[key][f'{name_stat}.{idx % layer_num}'] = v
+   955→
+   956→    def before_gnorm_clip_hook(trainer):
+   957→        if trainer_args.warmup_clip_grad_norm is None:
+   958→            return
+   959→        finished_steps = trainer.train_status.finished_train_steps
+   960→        if finished_steps >= trainer_args.warmup_iters * 2 / 3:
+   961→            trainer.train_args.optimizer.clip_gnorm = trainer_args.clip_grad_norm
+   962→        else:
+   963→            trainer.train_args.optimizer.clip_gnorm = trainer_args.warmup_clip_grad_norm
+   964→
+   965→    def autodist_wrapper(graph, cfg):
+   966→        for node in graph.select(ntype=IRFwOperation):
+   967→            if ('out = h + r' in node.comment or 'out = h + r.float()' in node.comment) and node.fn == torch.add:
+   968→                node.post_hook = nnscaler_funcs.block_out_printer
+   969→            if 'nnscaler_all2all_moe_gmm' in node.signature or 'nnscaler_fused_moe_ffn' in node.signature:
+   970→                node.pre_hook = nnscaler_funcs.moe_timer_start
+   971→                node.post_hook = nnscaler_funcs.moe_timer_end
+   972→
+   973→        return pas_autodist(graph, cfg)
+   974→
+   975→    nnscaler_trainer_args = TrainerArgs(
+   976→        instance_name=args.name,
+   977→        gen_savedir=args.gen_savedir,
+   978→        run_mode=args.run_mode,
+   979→        compute_config=compute_config,
+   980→        pas_policy=autodist_wrapper,
+   981→        model=model_config,
+   982→        optimizer=optimizer_config,
+   983→        dataset=dataset_config,
+   984→        dataloader=dataloader_config,
+   985→        checkpoint=checkpoint_config,
+   986→        # if precision is not fp32, user should handle casting by themselves
+   987→        precision='none' if args.precision != 'fp32' else 'fp32',
+   988→        max_epochs=2,
+   989→        grad_accumulation_steps=args.update_freq,
+   990→        max_train_steps=trainer_args.max_updates,
+   991→        lr_scheduler=lrscheduler_config,
+   992→        log=[log_config],
+   993→        seed=0,
+   994→        gen_reuse=args.gen_reuse,
+   995→        broadcast_strategy=broadcast_strategy,
+   996→        dataset_sampler=sampler_config,
+   997→        dummy_sample_gen_fn=dummy_sample_gen_fn,
+   998→        init_env_fn=init_env_fn,
+   999→        hook=dict(
+  1000→            after_setup=after_setup_hook,
+  1001→            on_train_step_start=on_train_step_start_hook,
+  1002→            on_train_step_end=on_train_step_end_hook,
+  1003→            on_save_checkpoint=save_dataloader_state_hook,
+  1004→            on_load_checkpoint=on_load_checkpoint_hook,
+  1005→            after_load_checkpoint=after_load_checkpoint_hook,
+  1006→            before_log_train_metrics=before_log_metrics_hook,
+  1007→            after_aggregate_train_step_outputs=after_aggregate_train_step_outputs,
+  1008→            before_sync_grad=before_sync_grad,
+  1009→            after_sync_grad=after_sync_grad,
+  1010→            before_gnorm_clip=before_gnorm_clip_hook,
+  1011→        ),
+  1012→    )
+  1013→
+  1014→    trainer = Trainer(train_args=nnscaler_trainer_args)
+  1015→    trainer.run()
+  1016→
+  1017→
+  1018→if __name__ == '__main__':
+  1019→    model_args, data_args, trainer_args, args = config.parse_nnscaler_args()
+  1020→
+  1021→    if args.pipeline_nstages != 'auto':
+  1022→        args.pipeline_nstages = int(args.pipeline_nstages)
+  1023→        if args.pipeline_nstages > 1 and not args.pipeline_pivots:
+  1024→            raise ValueError('pipeline_pivots must be specified when pipeline is enabled')
+  1025→
+  1026→    if os.getenv('DETERMINISTIC'):  # reduce randomness for integration test
+  1027→        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+  1028→        torch.use_deterministic_algorithms(True)
+  1029→
+  1030→    main(model_args, data_args, trainer_args, args)
+  1031→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

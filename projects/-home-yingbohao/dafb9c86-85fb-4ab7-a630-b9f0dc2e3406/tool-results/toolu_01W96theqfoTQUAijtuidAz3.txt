@@ -1,0 +1,869 @@
+     1→import gc
+     2→import json
+     3→import os
+     4→import math
+     5→from dataclasses import dataclass
+     6→import hashlib
+     7→import torch
+     8→from typing import List, Dict, Any, Optional, Callable
+     9→from random import Random
+    10→import multiprocessing as mp
+    11→
+    12→import numpy as np
+    13→
+    14→from .tokenizer import Tokenizer
+    15→from .packing import pack_data_for_batch
+    16→
+    17→from .lm_loader import (
+    18→    DataLoaderArgs,
+    19→    get_password,
+    20→    _read_from_encrypted_zip_libarchive,
+    21→    apply_to_sample,
+    22→    naive_detect_repeat_at_end,
+    23→)
+    24→
+    25→import gzip
+    26→import zipfile
+    27→
+    28→
+    29→def add_code_prompt_template(message):
+    30→    assert message[0]["role"] == "user"
+    31→    message[0]["content"] = f"Write a solution for the following programming challenge. Provide a brief explanation of your approach, followed by the complete code.\n{message[0]['content']}"
+    32→    return message
+    33→
+    34→
+    35→def add_math_prompt_template(message):
+    36→    assert message[0]["role"] == "user"
+    37→    message[0]["content"] = f"Solve the following math problem. Explain your reasoning and put the final answer in \\boxed{{}}.\n{message[0]['content']}"
+    38→    return message
+    39→
+    40→
+    41→def add_science_prompt_template(message):
+    42→    assert message[0]["role"] == "user"
+    43→    message[0]["content"] = f"Read the following problem carefully and provide a detailed, step-by-step answer.\n{message[0]['content']}"
+    44→    return message
+    45→
+    46→
+    47→TRANSFORM_FUNCS = {
+    48→    'add_code_prompt_template': add_code_prompt_template,
+    49→    'add_math_prompt_template': add_math_prompt_template,
+    50→    'add_science_prompt_template': add_science_prompt_template,
+    51→}
+    52→
+    53→
+    54→class DatasetIterator:
+    55→    """单个数据集的无限迭代器"""
+    56→    
+    57→    def __init__(self, name, files, index, tag_index, args, tokenizer, wav_password, 
+    58→                 global_seed, num_shards, shard_id, shuffle=True,
+    59→                 is_chat_dataset=False, transform_func=None):
+    60→        self.name = name
+    61→        self.files = files
+    62→        self.index = index
+    63→        self.tag_index = tag_index
+    64→        self.args = args
+    65→        self.tokenizer = tokenizer
+    66→        self.wav_password = wav_password
+    67→        self.global_seed = global_seed
+    68→        self.num_shards = num_shards
+    69→        self.shard_id = shard_id
+    70→        self.shuffle = shuffle
+    71→        self.num_files = len(files)
+    72→        self.is_chat_dataset = is_chat_dataset
+    73→        self.transform_func = transform_func
+    74→        
+    75→        self.epoch = 0
+    76→        self.file_index = 0
+    77→        self.item_index = 0
+    78→        self._iterator = None
+    79→    
+    80→    def state_dict(self):
+    81→        return {'epoch': self.epoch, 'file_index': self.file_index, 'item_index': self.item_index}
+    82→    
+    83→    def load_state_dict(self, state):
+    84→        self.epoch = state['epoch']
+    85→        self.file_index = state['file_index']
+    86→        self.item_index = state['item_index']
+    87→        if self.args.skip_to_next_iteration:
+    88→            self.item_index = 0
+    89→            self.file_index += 1
+    90→        self._iterator = None
+    91→    
+    92→    def _get_epoch_file_groups(self, epoch):
+    93→        stack = self.args.stack_file_size
+    94→        assert self.num_files > 0, f"Dataset {self.name} has no files"
+    95→        repeat = math.ceil(self.num_shards * stack / self.num_files)
+    96→        if repeat > 1:
+    97→            print(f"Warning: {self.name} dataset has num of shards {self.num_shards} is greater than num of files {self.num_files}, will repeat the shards {repeat} times")
+    98→        final_indices = np.tile(np.arange(self.num_files), repeat)
+    99→        if self.shuffle:
+   100→            for i in range(repeat):
+   101→                if self.name.endswith('-already_has'):
+   102→                    # data config can contain the same dataset twice with different tags, to enable different shuffling for each occurrence, we include the dataset name in the seed calculation. This is important to prevent all occurrences of the same dataset from having the same shuffle order, which would reduce data diversity in each epoch.
+   103→                    name_hash = int(hashlib.md5(self.name.encode()).hexdigest(), 16) % (2**32)
+   104→                    _seed = (name_hash + self.global_seed + epoch * repeat + i) % (2**32)
+   105→                else:
+   106→                    # backward compatible
+   107→                    _seed = self.global_seed + epoch * repeat + i
+   108→                rng = np.random.default_rng(_seed)
+   109→                rng.shuffle(final_indices[i*self.num_files:(i+1)*self.num_files])
+   110→        _unit = self.num_shards * stack
+   111→        final_indices = final_indices[:len(final_indices) // _unit * _unit]
+   112→        groups = [final_indices[i:i+stack] for i in range(0, len(final_indices), stack)]
+   113→        return groups[self.shard_id::self.num_shards]
+   114→    
+   115→    def _iterate(self):
+   116→        while True:
+   117→            file_groups = self._get_epoch_file_groups(self.epoch)
+   118→            
+   119→            while self.file_index < len(file_groups):
+   120→                group = file_groups[self.file_index]
+   121→                files = [self.files[i] for i in group]
+   122→                items = list(self._read_from_files(files))
+   123→                while self.item_index < len(items):
+   124→                    item = items[self.item_index]
+   125→                    self.item_index += 1  # 先更新状态，再 yield
+   126→                    yield item
+   127→                
+   128→                self.file_index += 1
+   129→                self.item_index = 0
+   130→            
+   131→            self.epoch += 1
+   132→            self.file_index = 0
+   133→    
+   134→    def __next__(self):
+   135→        if self._iterator is None:
+   136→            self._iterator = self._iterate()
+   137→        return next(self._iterator)
+   138→    
+   139→    def _read_from_files(self, files):
+   140→        data = []
+   141→        for file_path in files:
+   142→            if not os.path.exists(file_path):
+   143→                print(f"File {file_path} does not exist", flush=True)
+   144→                continue
+   145→
+   146→            if file_path.endswith('.jsonl.gz'):
+   147→                with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+   148→                    read_lines = list(f)
+   149→            elif file_path.endswith('.zip'):
+   150→                try:
+   151→                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
+   152→                        jsonl_list = [n for n in zip_ref.namelist() if n.endswith('.jsonl')]
+   153→                        assert len(jsonl_list) > 0, f"No jsonl file found in zip {file_path}"
+   154→                        # only read the first jsonl file
+   155→                        with zip_ref.open(jsonl_list[0], 'r') as f:
+   156→                            read_lines = [line.decode('utf-8') for line in f]
+   157→                except zipfile.BadZipFile:
+   158→                    print(f"| file {file_path} is not a valid zip file", flush=True)
+   159→                    continue
+   160→            elif file_path.endswith('.wav'):
+   161→                read_lines = _read_from_encrypted_zip_libarchive(file_path, password=self.wav_password)
+   162→            else:
+   163→                with open(file_path, "r", encoding="utf8") as f:
+   164→                    read_lines = f.readlines()
+   165→            
+   166→            to_tokenize_text_list = []
+   167→            is_chat_line_list = []
+   168→            for line in read_lines:
+   169→                if len(line) > 10_000_000:
+   170→                    continue
+   171→                try:
+   172→                    if self.is_chat_dataset:
+   173→                        to_tokenize_text, is_chat_line = self._chat_line_to_tokens(line, file_path)
+   174→                    else:
+   175→                        to_tokenize_text, is_chat_line = self._line_to_tokens(line, file_path)
+   176→                except Exception as e:
+   177→                    print(f"Skipping line due to error: {e} at file {file_path}", flush=True)
+   178→                    continue
+   179→                if to_tokenize_text is not None:
+   180→                    to_tokenize_text_list.append(to_tokenize_text)
+   181→                    is_chat_line_list.append(is_chat_line)
+   182→            
+   183→            del read_lines
+   184→            all_tokens_list = self.tokenizer.encode_batch(to_tokenize_text_list, bos=True, eos=False)
+   185→            
+   186→            assert len(all_tokens_list) == len(is_chat_line_list), f"Length mismatch between all_tokens_list and is_chat_line_list in file {file_path}"
+   187→
+   188→            for tokens, is_chat_line in zip(all_tokens_list, is_chat_line_list):
+   189→                if tokens is None:
+   190→                    continue
+   191→                # post processing for chat lines for faster batch encoding and loss mask creation
+   192→                if not is_chat_line:
+   193→                    tokens.append(self.tokenizer.eos_id)
+   194→                if is_chat_line and len(tokens) > self.args.max_seq_len:
+   195→                    continue
+   196→                if len(tokens) < self.args.discard_length_threshold:
+   197→                    continue
+   198→                if is_chat_line:
+   199→                    loss_mask = self._create_multiturn_loss_mask(tokens, file_path)
+   200→                else:
+   201→                    loss_mask = [True] * len(tokens)
+   202→                source, target, loss_mask = tokens[:-1], tokens[1:], loss_mask[1:]
+   203→                data.append({
+   204→                    'source': source, 'target': target, 'loss_mask': loss_mask,
+   205→                    'loss_index': [self.index] * len(source), 'tag_index': [self.tag_index] * len(source), 'is_chat_line': is_chat_line
+   206→                })
+   207→
+   208→        if self.name.endswith('-already_has'):
+   209→            # data config can contain the same dataset twice with different tags, to enable different shuffling for each occurrence, we include the dataset name in the seed calculation. This is important to prevent all occurrences of the same dataset from having the same shuffle order, which would reduce data diversity in each epoch.
+   210→            hash_str = files[0] + self.name
+   211→        else:
+   212→            # backward compatible
+   213→            hash_str = files[0]
+   214→        file_hash = int(hashlib.md5(hash_str.encode()).hexdigest(), 16) % (2**32)
+   215→        rng = np.random.default_rng((file_hash + self.global_seed + self.shard_id) % (2**32))
+   216→        rng.shuffle(data)
+   217→        
+   218→        split_data = []
+   219→        for item in data:
+   220→            while len(item['source']) > self.args.max_seq_len:
+   221→                split_data.append({
+   222→                    'source': item['source'][:self.args.max_seq_len],
+   223→                    'target': item['target'][:self.args.max_seq_len],
+   224→                    'loss_mask': item['loss_mask'][:self.args.max_seq_len],
+   225→                    'loss_index': item['loss_index'][:self.args.max_seq_len],
+   226→                    'tag_index': item['tag_index'][:self.args.max_seq_len],
+   227→                    'is_chat_line': item['is_chat_line']
+   228→                })
+   229→                item['source'] = [self.tokenizer.bos_id] + item['source'][self.args.max_seq_len:]
+   230→                item['target'] = [item['source'][1]] + item['target'][self.args.max_seq_len:]
+   231→                item['loss_mask'] = [True] + item['loss_mask'][self.args.max_seq_len:]
+   232→                item['loss_index'] = [self.index] + item['loss_index'][self.args.max_seq_len:]
+   233→                item['tag_index'] = [self.tag_index] + item['tag_index'][self.args.max_seq_len:]
+   234→            if len(item['source']) > self.args.discard_length_threshold:
+   235→                cur_len = len(item['source'])
+   236→                if cur_len % self.args.pad_divisible_by != 0:
+   237→                    pad = self.args.pad_divisible_by - cur_len % self.args.pad_divisible_by
+   238→                    item['source'] += [self.tokenizer.pad_id] * pad
+   239→                    item['target'] += [self.tokenizer.pad_id] * pad
+   240→                    item['loss_mask'] += [False] * pad
+   241→                    item['loss_index'] += [self.index] * pad
+   242→                    item['tag_index'] += [self.tag_index] * pad
+   243→                split_data.append(item)
+   244→
+   245→        return pack_data_for_batch(split_data, self.args.max_seq_len, algorithm=self.args.packing_strategy)
+   246→    
+   247→    def _line_to_tokens(self, line, file_path):
+   248→        is_chat_line = False
+   249→        line = line.strip()
+   250→        if not line:
+   251→            return None, None
+   252→
+   253→        try:
+   254→            line = json.loads(line)
+   255→        except json.decoder.JSONDecodeError as e:
+   256→            print(f"Error parsing JSON: {e} in {file_path}", flush=True)
+   257→            return None, None
+   258→        
+   259→        if 'problem' in line:
+   260→            line['prompt'] = line.pop('problem')
+   261→        if 'question' in line:
+   262→            line['prompt'] = line.pop('question')
+   263→
+   264→        if 'text' in line and 'thought' in line:
+   265→            if line.get('input_token_count', -1) > 64 * 1024:
+   266→                return None, None
+   267→            to_encode_text = f"{line['text']}\n\n<think>\n{line['thought']}\n</think>"
+   268→        elif 'text' in line or 'raw_content_lines' in line:
+   269→            text = line.get('text') or ' '.join(line.get('raw_content_lines', []))
+   270→            if naive_detect_repeat_at_end(text):
+   271→                return None, None
+   272→            to_encode_text = text
+   273→        elif 'prompt' in line and 'completion' in line:
+   274→            system_prompt = "You are a helpful and friendly AI assistant."
+   275→            content = f"<think>\n{line['think']}\n</think>\n\n{line['completion']}" if 'think' in line else line['completion']
+   276→            message = [
+   277→                {"role": "system", "content": system_prompt},
+   278→                {"role": "user", "content": line["prompt"]},
+   279→                {"role": "assistant", "content": content}
+   280→            ]
+   281→            if naive_detect_repeat_at_end(line['completion']):
+   282→                return None, None
+   283→            to_encode_text = self.tokenizer.apply_chat_template(message)
+   284→            is_chat_line = True
+   285→        else:
+   286→            raise ValueError(f"unknown line keys: {line.keys()} in {file_path}")
+   287→        return to_encode_text, is_chat_line
+   288→    
+   289→    def _create_multiturn_loss_mask(self, full_tokens, file_path):
+   290→        """
+   291→        Create loss mask for multi-turn conversation that only trains on the last turn's assistant response.
+   292→        
+   293→        Logic:
+   294→        1. Find the last "<|start|>user" which marks the beginning of the last turn
+   295→        2. For each "<|start|>assistant" segment, set loss from after "<|start|>assistant" to <|call|> or <|return|>
+   296→        3. Tool responses (between <|call|> and next <|start|>assistant) are NOT included in loss
+   297→        
+   298→        Example:
+   299→        <|start|>assistant...<|call|> -> loss (assistant generating tool call)
+   300→        <|start|>functions... <|end|> -> NO loss (tool response)
+   301→        <|start|>assistant...<|return|> -> loss (assistant generating final response)
+   302→        """
+   303→        loss_mask = [False] * len(full_tokens)
+   304→        
+   305→        # Token patterns
+   306→        user_start_tokens = self.tokenizer.encode("<|start|>user", bos=False, eos=False)
+   307→        assistant_start_tokens = self.tokenizer.encode("<|start|>assistant", bos=False, eos=False)
+   308→        
+   309→        # End tokens for assistant segments
+   310→        call_token = self.tokenizer.encode("<|call|>", bos=False, eos=False)
+   311→        return_token = self.tokenizer.encode("<|return|>", bos=False, eos=False)
+   312→        
+   313→        # Find the last <|start|>user position
+   314→        last_user_start = -1
+   315→        for i in range(len(full_tokens) - len(user_start_tokens), -1, -1):
+   316→            if full_tokens[i:i+len(user_start_tokens)] == user_start_tokens:
+   317→                last_user_start = i
+   318→                break
+   319→        
+   320→        if last_user_start == -1:
+   321→            print(f"Warning: No user start token found in the conversation. file_path: {file_path}", flush=True)
+   322→            return [False] * len(full_tokens)
+   323→        
+   324→        # Find all <|start|>assistant positions after last_user_start
+   325→        assistant_positions = []
+   326→        i = last_user_start
+   327→        while i <= len(full_tokens) - len(assistant_start_tokens):
+   328→            if full_tokens[i:i+len(assistant_start_tokens)] == assistant_start_tokens:
+   329→                assistant_positions.append(i)
+   330→                i += len(assistant_start_tokens)
+   331→            else:
+   332→                i += 1
+   333→        
+   334→        if len(assistant_positions) == 0:
+   335→            print(f"Warning: No assistant start token found after last user turn. file_path: {file_path}", flush=True)
+   336→            return [False] * len(full_tokens)
+   337→        
+   338→        # For each assistant segment, find its end (<|call|> or <|return|>) and set loss_mask
+   339→        for assistant_start in assistant_positions:
+   340→            search_start = assistant_start + len(assistant_start_tokens)
+   341→            
+   342→            # Find the nearest <|call|> or <|return|>
+   343→            end_pos = -1
+   344→            end_token_len = 0
+   345→            
+   346→            for end_tokens, token_len in [(call_token, len(call_token)), (return_token, len(return_token))]:
+   347→                for j in range(search_start, len(full_tokens) - token_len + 1):
+   348→                    if full_tokens[j:j+token_len] == end_tokens:
+   349→                        if end_pos == -1 or j < end_pos:
+   350→                            end_pos = j
+   351→                            end_token_len = token_len
+   352→                        break
+   353→            
+   354→            if end_pos == -1:
+   355→                # No <|call|> or <|return|> found, skip this segment
+   356→                continue
+   357→            
+   358→            # Set loss_mask from after assistant_start_tokens to end_pos + end_token_len
+   359→            mask_start = assistant_start + len(assistant_start_tokens)
+   360→            for k in range(mask_start, end_pos + end_token_len):
+   361→                loss_mask[k] = True
+   362→        
+   363→        return loss_mask
+   364→    
+   365→    def _chat_line_to_tokens(self, line, file_path):
+   366→        is_chat_line = True
+   367→        line = json.loads(line)
+   368→        tools = line.get("tools", None)
+   369→        message = line["messages"]
+   370→        
+   371→        # Apply transform function if provided
+   372→        if self.transform_func is not None:
+   373→            message = self.transform_func(message)
+   374→        
+   375→        if message[0]["role"] == "system":  # remove existing system prompt
+   376→            if "You are a helpful and friendly AI assistant." in message[0]["content"]:
+   377→                message = message[1:]
+   378→                
+   379→        if message[0]["role"] != "system":  # add default system prompt
+   380→            system_prompt = "You are a helpful and friendly AI assistant."
+   381→            message = [{"role": "system", "content": system_prompt}] + message
+   382→        
+   383→        # only check the last message for repeated patterns
+   384→        if "content" in message[-1] and naive_detect_repeat_at_end(message[-1]["content"]):
+   385→            print(f"Skipping line with repeated patterns at {file_path}")
+   386→            return None, None
+   387→
+   388→        full_text = self.tokenizer.apply_chat_template(message, tools=tools)
+   389→        return full_text, is_chat_line
+   390→
+   391→
+   392→@dataclass
+   393→class DatasetConfig:
+   394→    name: str
+   395→    files: List[str]
+   396→    index: int
+   397→    tag_index: int
+   398→    weight: float
+   399→    is_chat_dataset: bool = False
+   400→    transform_func_name: Optional[str] = None
+   401→
+   402→
+   403→class Worker:
+   404→    def __init__(self, worker_id: int, num_workers: int, all_datasets: List[DatasetConfig],
+   405→                 args: DataLoaderArgs, wav_password: str, global_seed: int, 
+   406→                 num_shards: int, shard_id: int, shuffle: bool = True):
+   407→        self.worker_id = worker_id
+   408→        self.num_workers = num_workers
+   409→        self.args = args
+   410→        self.wav_password = wav_password
+   411→        self.global_seed = global_seed
+   412→        self.num_shards = num_shards
+   413→        self.shard_id = shard_id
+   414→        self.shuffle = shuffle
+   415→        
+   416→        self.tokenizer = Tokenizer()
+   417→        
+   418→        my_datasets = all_datasets[worker_id::num_workers]
+   419→        self.weights = [d.weight for d in my_datasets]
+   420→        total = sum(self.weights)
+   421→        self.weights = [w / total for w in self.weights]
+   422→        
+   423→        self.iterators = [
+   424→            DatasetIterator(
+   425→                name=ds.name, files=ds.files, index=ds.index, tag_index=ds.tag_index,
+   426→                args=args, tokenizer=self.tokenizer, wav_password=wav_password,
+   427→                global_seed=global_seed, num_shards=num_shards,
+   428→                shard_id=shard_id, shuffle=shuffle,
+   429→                is_chat_dataset=ds.is_chat_dataset,
+   430→                transform_func=TRANSFORM_FUNCS.get(ds.transform_func_name),
+   431→            ) for ds in my_datasets
+   432→        ]
+   433→        
+   434→        self.rng = Random(global_seed + shard_id * num_workers + worker_id)
+   435→        self._process = None
+   436→        self._queue = None
+   437→        self._iterator = None
+   438→        self._last_state = None
+   439→    
+   440→    def _get_current_state(self) -> Dict:
+   441→        return {
+   442→            'rng_state': self.rng.getstate(),
+   443→            'dataset_states': {it.name: it.state_dict() for it in self.iterators}
+   444→        }
+   445→    
+   446→    def state_dict(self) -> Dict:
+   447→        if self._last_state is None:
+   448→            # print("[Worker] returning current state as no cached state found", flush=True)
+   449→            return self._get_current_state()
+   450→        return self._last_state
+   451→    
+   452→    def load_state_dict(self, state: Dict):
+   453→        self._stop()
+   454→        self.rng.setstate(state['rng_state'])
+   455→        dataset_states = state['dataset_states']
+   456→        for it in self.iterators:
+   457→            if it.name in dataset_states:
+   458→                it.load_state_dict(dataset_states[it.name])
+   459→            else:
+   460→                print(f"Dataset {it.name} not found in state", flush=True)
+   461→        self._last_state = None
+   462→        self._iterator = None
+   463→    
+   464→    def _stop(self):
+   465→        if self._process:
+   466→            self._process.terminate()
+   467→            self._process.join(timeout=1)
+   468→            self._process = None
+   469→        if self._queue:
+   470→            self._queue.close()
+   471→            self._queue = None
+   472→        self._iterator = None
+   473→    
+   474→    def _run_loop(self, out_queue, gc_freq = 5000):
+   475→        gc.disable()
+   476→        gc.collect()
+   477→        step = 0
+   478→        while True:
+   479→            idx = self.rng.choices(range(len(self.iterators)), self.weights)[0]
+   480→            try:
+   481→                out_queue.put((next(self.iterators[idx]), self._get_current_state()))
+   482→            except Exception as e:
+   483→                print(f"Worker {self.worker_id} encountered error while putting item to queue: {e}", flush=True)
+   484→                raise e
+   485→            step += 1
+   486→            if step % gc_freq == 0:
+   487→                gc.collect(1)
+   488→    
+   489→    def _iterate(self):
+   490→        self._queue = mp.Queue(maxsize=16)
+   491→        self._process = mp.Process(target=self._run_loop, args=(self._queue,))
+   492→        self._process.start()
+   493→        while True:
+   494→            try:
+   495→                item, self._last_state = self._queue.get()
+   496→            except Exception as e:
+   497→                print(f"Worker {self.worker_id} encountered error while getting item from queue: {e}", flush=True)
+   498→                raise e
+   499→            yield item
+   500→    
+   501→    def __next__(self):
+   502→        if self._iterator is None:
+   503→            self._iterator = self._iterate()
+   504→        return next(self._iterator)
+   505→    
+   506→    def __del__(self):
+   507→        self._stop()
+   508→
+   509→class PrefetchIterator:
+   510→    def __init__(self, all_datasets: List[DatasetConfig], args: DataLoaderArgs,
+   511→                 wav_password: str, global_seed: int, num_shards: int, shard_id: int,
+   512→                 shuffle: bool, batch_size: int, collate_fn):
+   513→        self.all_datasets = all_datasets
+   514→        self.args = args
+   515→        self.wav_password = wav_password
+   516→        self.global_seed = global_seed
+   517→        self.num_shards = num_shards
+   518→        self.shard_id = shard_id
+   519→        self.shuffle = shuffle
+   520→        self.batch_size = batch_size
+   521→        self.collate_fn = collate_fn
+   522→        
+   523→        self.num_workers = max(1, min(args.num_workers, len(all_datasets)))
+   524→        
+   525→        # 计算worker权重
+   526→        worker_weights = []
+   527→        for wid in range(self.num_workers):
+   528→            w = sum(ds.weight for ds in all_datasets[wid::self.num_workers])
+   529→            worker_weights.append(w)
+   530→        total = sum(worker_weights)
+   531→        self.worker_weights = [w / total for w in worker_weights]
+   532→        
+   533→        self.sampler_rng = Random(global_seed + shard_id)
+   534→        
+   535→        self.workers = [
+   536→            Worker(wid, self.num_workers, all_datasets, args, wav_password,
+   537→                   global_seed, num_shards, shard_id, shuffle)
+   538→            for wid in range(self.num_workers)
+   539→        ]
+   540→        self._process = None
+   541→        self._queue = None
+   542→        self._iterator = None
+   543→        self._last_state = None
+   544→    
+   545→    def state_dict(self) -> Dict:
+   546→        if self._last_state is None:
+   547→            # print("[PrefetchIterator] returning current state as no cached state found", flush=True)
+   548→            return self._get_current_state()
+   549→        return self._last_state
+   550→
+   551→    def _get_current_state(self) -> Dict:
+   552→        dataset_states = {}
+   553→        worker_rng_states = []
+   554→        for w in self.workers:
+   555→            ws = w.state_dict()
+   556→            worker_rng_states.append(ws['rng_state'])
+   557→            dataset_states.update(ws['dataset_states'])
+   558→        return {
+   559→            'sampler_rng_state': self.sampler_rng.getstate(),
+   560→            'worker_rng_states': worker_rng_states,
+   561→            'dataset_states': dataset_states,
+   562→        }
+   563→    
+   564→    def load_state_dict(self, state: Dict):
+   565→        self._stop()
+   566→        self.sampler_rng.setstate(state['sampler_rng_state'])
+   567→        for i, w in enumerate(self.workers):
+   568→            w.load_state_dict({'rng_state': state['worker_rng_states'][i], 'dataset_states': state['dataset_states']})
+   569→        self._last_state = None
+   570→        self._iterator = None
+   571→    
+   572→    def _stop(self):
+   573→        if self._process:
+   574→            self._process.terminate()
+   575→            self._process.join(timeout=1)
+   576→            self._process = None
+   577→        if self._queue:
+   578→            self._queue.close()
+   579→            self._queue = None
+   580→        # 停止所有 workers
+   581→        for w in self.workers:
+   582→            w._stop()
+   583→        self._iterator = None
+   584→    
+   585→    def _run_loop(self, out_queue, gc_freq = 5000):
+   586→        gc.disable()
+   587→        gc.collect()
+   588→        step = 0
+   589→        indices = list(range(len(self.workers)))
+   590→        batch = []
+   591→        while True:
+   592→            idx = self.sampler_rng.choices(indices, self.worker_weights)[0]
+   593→            batch.append(next(self.workers[idx]))
+   594→            if len(batch) >= self.batch_size:
+   595→                state = self._get_current_state()
+   596→                out_queue.put((self.collate_fn(batch), state))
+   597→                batch = []
+   598→                step += 1
+   599→                if step % gc_freq == 0:
+   600→                    gc.collect(1)
+   601→    
+   602→    def _iterate(self):
+   603→        self._queue = mp.Queue(maxsize=96 * 2 ** 20 // self.args.max_seq_len)
+   604→        self._process = mp.Process(target=self._run_loop, args=(self._queue,))
+   605→        self._process.start()
+   606→        while True:
+   607→            # if self._queue.empty():
+   608→            #     print(f"[DataLoader] Warning: prefetch buffer is empty, data loading may be a bottleneck", flush=True)
+   609→            item, self._last_state = self._queue.get()
+   610→            yield item
+   611→    
+   612→    def __next__(self):
+   613→        if self._iterator is None:
+   614→            self._iterator = self._iterate()
+   615→        return next(self._iterator)
+   616→    
+   617→    def __del__(self):
+   618→        self._stop()
+   619→
+   620→
+   621→class DataLoader:
+   622→    def __init__(self, args, seed=1, shuffle=True, prefetch=True,
+   623→                 num_shards=1, shard_id=0, device='cuda'):
+   624→        self.args = args
+   625→        self.global_seed = seed
+   626→        self.seed = seed + shard_id
+   627→        self.shuffle = shuffle
+   628→        self.num_shards = num_shards
+   629→        self.shard_id = shard_id
+   630→        
+   631→        self.tokenizer = Tokenizer()
+   632→        self.wav_password = get_password(args)
+   633→        
+   634→        self.data = self._prepare_data(args.data_path, args.data_weight)
+   635→        self.all_datasets: List[DatasetConfig] = []
+   636→        self.data_tags = []
+   637→        for d in self.data:
+   638→            if d['weight'] > 0:
+   639→                with open(d['source']) as f:
+   640→                    files = json.load(f)
+   641→                # 判断是否为 chat 数据集
+   642→                is_chat = d.get('is_chat_dataset', False)
+   643→                if 'nemotron_post_training' in d['name'].lower():
+   644→                    is_chat = True
+   645→                if 'shaohan_sft' in d['name'].lower():
+   646→                    is_chat = True
+   647→                if "general_ai_reasoning" in d['source'].lower():
+   648→                    is_chat = True
+   649→                if isinstance(files[0], str) and "general_ai_reasoning" in files[0].lower():
+   650→                    is_chat = True
+   651→                
+   652→                if getattr(args, 'force_chat_dataset', False):
+   653→                    is_chat = True
+   654→
+   655→                transform_func_name = d.get('transform_func', None)
+   656→                if transform_func_name:
+   657→                    assert transform_func_name in TRANSFORM_FUNCS, \
+   658→                        f"transform_func '{transform_func_name}' not found. Available: {list(TRANSFORM_FUNCS.keys())}"
+   659→                
+   660→                tag, _, data_attr = d.get('tag', 'default').partition(',')
+   661→                if data_attr == 'disable_balance_loss':
+   662→                    if shard_id == 0:
+   663→                        print(f"[disable_balance_loss] {d['name']}")
+   664→                    tag_index = -1
+   665→                else:
+   666→                    try:
+   667→                        tag_index = self.data_tags.index(tag)
+   668→                    except ValueError:
+   669→                        tag_index = len(self.data_tags)
+   670→                        self.data_tags.append(tag)
+   671→                self.all_datasets.append(DatasetConfig(
+   672→                    name=d['name'], files=files, index=len(self.all_datasets), tag_index=tag_index, weight=d['weight'],
+   673→                    is_chat_dataset=is_chat, transform_func_name=transform_func_name
+   674→                ))
+   675→            else:
+   676→                print(f"Skipping data with weight 0: {d['name']}")
+   677→        
+   678→        self.dataset_name = [ds.name for ds in self.all_datasets]
+   679→        
+   680→        self._prefetch = PrefetchIterator(
+   681→            self.all_datasets, args, self.wav_password, self.global_seed,
+   682→            self.num_shards, self.shard_id, self.shuffle, args.batch_size, self._collate
+   683→        )
+   684→        self._step = 0
+   685→    
+   686→    def _prepare_data(self, data_path, data_weight):
+   687→        paths = data_path.split(',')
+   688→        weights = [float(w) for w in data_weight.split(',')]
+   689→        total = sum(weights)
+   690→        weights = [w/total for w in weights]
+   691→        assert len(paths) == len(weights), "data_path and data_weight must have the same number of elements"
+   692→
+   693→        data = []
+   694→        for path, weight in zip(paths, weights):
+   695→            with open(path) as f:
+   696→                config_data = json.load(f)
+   697→            if isinstance(config_data[0], str):
+   698→                name = path.split('/')[-1].split('.')[0]
+   699→                data.append({'name': name, 'source': path, 'weight': weight})
+   700→            else:
+   701→                data.extend(self._recursive_load_data(config_data, weight, path, None))
+   702→        return data
+   703→
+   704→    def _recursive_load_data(self, data_list, accumulated_weight, config_path, tag_override=None):
+   705→        result = []
+   706→        total = sum(item['weight'] for item in data_list)
+   707→        for item in data_list:
+   708→            cur_weight = accumulated_weight * item['weight'] / total
+   709→            if 'source' not in item:
+   710→                item['source'] = f"{os.path.dirname(config_path)}/{item['name']}.json"
+   711→            if tag_override is not None and item.get('tag', None) != tag_override:
+   712→                print(f"Overriding tag for dataset {item['name']} from {item.get('tag', 'None')} to {tag_override}")
+   713→                item['tag'] = tag_override
+   714→            
+   715→            with open(item['source']) as f:
+   716→                src_data = json.load(f)
+   717→            if isinstance(src_data[0], str):    # leaf node
+   718→                item['weight'] = cur_weight
+   719→                result.append(item)
+   720→            else:
+   721→                result.extend(self._recursive_load_data(src_data, cur_weight, item['source'], tag_override=item.get('tag', None)))
+   722→        return result
+   723→    
+   724→    def _collate(self, batch):
+   725→        input_ids, target_ids, positions, loss_mask, loss_index, tag_index = [], [], [], [], [], []
+   726→        cu_seqlens = [0]
+   727→        max_seqlen = 0
+   728→        
+   729→        for item in [x for b in batch for x in b]:
+   730→            n = len(item['source'])
+   731→            input_ids.extend(item['source'])
+   732→            target_ids.extend(item['target'])
+   733→            loss_mask.extend(item['loss_mask'])
+   734→            loss_index.extend(item['loss_index'])
+   735→            tag_index.extend(item['tag_index'])
+   736→            positions.extend(range(n))
+   737→            cu_seqlens.append(cu_seqlens[-1] + n)
+   738→            max_seqlen = max(max_seqlen, n)
+   739→
+   740→        pad = self.args.batch_size * self.args.max_seq_len - len(input_ids)
+   741→        assert pad >= 0, f"Batch size {self.args.batch_size} and max_seq_len {self.args.max_seq_len} are too small for the data. Required pad: {pad}"
+   742→        if pad > 0:
+   743→            input_ids.extend([self.tokenizer.pad_id] * pad)
+   744→            target_ids.extend([self.tokenizer.pad_id] * pad)
+   745→            loss_mask.extend([False] * pad)
+   746→            loss_index.extend([0] * pad)
+   747→            tag_index.extend([0] * pad)
+   748→            positions.extend([0] * pad)
+   749→            while pad > self.args.max_seq_len:
+   750→                cu_seqlens.append(cu_seqlens[-1] + self.args.max_seq_len)
+   751→                pad -= self.args.max_seq_len
+   752→            cu_seqlens.append(cu_seqlens[-1] + pad)
+   753→        
+   754→        input_ids = np.array(input_ids, dtype=np.int64)
+   755→        target_ids = np.array(target_ids, dtype=np.int64)
+   756→        loss_mask = np.array(loss_mask, dtype=bool)
+   757→        loss_index = np.array(loss_index, dtype=np.int32)
+   758→        tag_index = np.array(tag_index, dtype=np.int32)
+   759→        target_ids = np.where(loss_mask, target_ids, self.tokenizer.pad_id)
+   760→
+   761→        return {
+   762→            'tokens': input_ids, 'targets': target_ids,
+   763→            'context': {
+   764→                'cu_seqlens_q': np.array(cu_seqlens, dtype=np.int32),
+   765→                'cu_seqlens_k': np.array(cu_seqlens, dtype=np.int32),
+   766→                'max_seqlen_q': max_seqlen, 'max_seqlen_k': max_seqlen,
+   767→                'positions': np.array(positions, dtype=np.int32),
+   768→            },
+   769→            'loss_mask': loss_mask, 'loss_index': loss_index,
+   770→            'tag_index': tag_index, 'dataset_length': len(self.dataset_name), 'tag_length': len(self.data_tags)
+   771→        }
+   772→    
+   773→    def __iter__(self):
+   774→        return self
+   775→    
+   776→    def __next__(self):
+   777→        batch = next(self._prefetch)
+   778→        self._step += 1
+   779→        return apply_to_sample(batch)
+   780→    
+   781→    @property
+   782→    def iterator(self):
+   783→        return self
+   784→    
+   785→    def state_dict(self) -> Dict:
+   786→        return {
+   787→            'step': self._step,
+   788→            'iter_state': self._prefetch.state_dict(),
+   789→        }
+   790→    
+   791→    def load_state_dict(self, state: Dict):
+   792→        self._step = state['step']
+   793→        self._prefetch.load_state_dict(state['iter_state'])
+   794→    
+   795→    def getstate(self):
+   796→        return self.state_dict()
+   797→    
+   798→    def setstate(self, state):
+   799→        self.load_state_dict(state)
+   800→    
+   801→    def close(self):
+   802→        self._prefetch._stop()
+   803→    
+   804→    def __del__(self):
+   805→        self.close()
+   806→
+   807→
+   808→def resume_test():
+   809→    import time
+   810→    from datetime import datetime
+   811→    
+   812→    args = DataLoaderArgs(
+   813→        data_path="/mnt/msranlphot/wangliang/data/experimental-phase1-config-6.5T-260215-add-tag/train.json",
+   814→        data_weight="1.0",
+   815→        max_seq_len=8192,
+   816→        stack_file_size=1,
+   817→        seed=1,
+   818→        batch_size=2,
+   819→        num_epochs=100,
+   820→        discard_length_threshold=64,
+   821→        pad_divisible_by=1,
+   822→        num_workers=4,
+   823→        packing_strategy='ffd',
+   824→    )
+   825→    ckpt_step = 5
+   826→    
+   827→    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+   828→    init_start = time.time()
+   829→    loader = DataLoader(args, num_shards=512, shard_id=0)
+   830→    print(f"Init time: {time.time() - init_start:.2f}s")
+   831→    
+   832→    # 读几步，保存 state，再读一步作为 check_batch
+   833→    for i in range(ckpt_step):
+   834→        print(f"Step {i}")
+   835→        batch = next(loader)
+   836→        print(batch['tag_index'])
+   837→    
+   838→    state_dict = loader.state_dict()
+   839→    check_batch = next(loader)
+   840→    print(f"Check cu_seqlens_q = {check_batch['context']['cu_seqlens_q']}")
+   841→    loader.close()
+   842→    
+   843→    # 重新创建 loader，恢复 state
+   844→    print("\n--- Resuming ---")
+   845→    init_start = time.time()
+   846→    loader2 = DataLoader(args, num_shards=512, shard_id=0)
+   847→    loader2.load_state_dict(state_dict)
+   848→    print(f"Init + load_state time: {time.time() - init_start:.2f}s")
+   849→    
+   850→    resume_batch = next(loader2)
+   851→    print(f"Resume cu_seqlens_q = {resume_batch['context']['cu_seqlens_q']}")
+   852→    loader2.close()
+   853→    
+   854→    # 比较
+   855→    cu_seqlens_match = len(check_batch['context']['cu_seqlens_q']) == len(resume_batch['context']['cu_seqlens_q']) and (check_batch['context']['cu_seqlens_q'] == resume_batch['context']['cu_seqlens_q']).all()
+   856→    print(f"cu_seqlens match: {cu_seqlens_match}")
+   857→    if cu_seqlens_match:
+   858→        print("Resume test PASSED!")
+   859→    else:
+   860→        print("Resume test FAILED!")
+   861→
+   862→
+   863→if __name__ == "__main__":
+   864→    resume_test()
+   865→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

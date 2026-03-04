@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------
+# monitor.sh — Real-time monitoring of NVFP4 experiments
+#
+# Usage:
+#   bash scripts/nvfp4_experiment/monitor.sh            # one-shot
+#   bash scripts/nvfp4_experiment/monitor.sh --watch     # auto-refresh every 10s
+#   bash scripts/nvfp4_experiment/monitor.sh --watch 5   # auto-refresh every 5s
+# ---------------------------------------------------------------
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOG_DIR="${PROJECT_DIR}/logs"
+PID_FILE="${LOG_DIR}/pids.txt"
+
+# -------- parse flags --------
+WATCH=false
+INTERVAL=10
+if [[ "${1:-}" == "--watch" ]]; then
+    WATCH=true
+    if [[ -n "${2:-}" && "${2:-}" =~ ^[0-9]+$ ]]; then
+        INTERVAL="$2"
+    fi
+fi
+
+# -------- color helpers --------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'  # No Color
+
+# -------- status display function --------
+show_status() {
+    echo -e "${BOLD}========================================================${NC}"
+    echo -e "${BOLD}  NVFP4 Experiment Monitor  $(date '+%Y-%m-%d %H:%M:%S')${NC}"
+    echo -e "${BOLD}========================================================${NC}"
+    echo ""
+
+    # Check if PID file exists
+    if [[ ! -f "$PID_FILE" ]]; then
+        echo -e "${YELLOW}No PID file found at ${PID_FILE}${NC}"
+        echo "Have you started experiments with run_all.sh?"
+        return
+    fi
+
+    # -------- Process status --------
+    printf "${BOLD}%-30s %-8s %-10s %-10s %-12s %-10s %-10s${NC}\n" \
+        "EXPERIMENT" "PID" "STATUS" "STEP" "LOSS(BPB)" "GNORM" "TPUT(tok/s)"
+    echo "------------------------------------------------------------------------------------------------------"
+
+    while IFS=' ' read -r pid name; do
+        [[ -z "$pid" ]] && continue
+
+        # Check if process is alive
+        if kill -0 "$pid" 2>/dev/null; then
+            status="${GREEN}RUNNING${NC}"
+        else
+            # Check exit code from wait file or just mark as done
+            status="${CYAN}DONE${NC}"
+        fi
+
+        # Parse latest metrics from log file
+        log_file="${LOG_DIR}/${name}.log"
+        step="-"
+        loss="-"
+        gnorm="-"
+        throughput="-"
+        lr="-"
+
+        if [[ -f "$log_file" ]]; then
+            # nnscaler logs metrics in format like:
+            #   train/train_loss: 10.234, train/gnorm: 1.23, train/lr: 0.0006, train/throughput: 12345
+            # Try to extract from the last few lines containing metrics
+            last_metrics=$(tail -200 "$log_file" 2>/dev/null | grep -E "train_loss|throughput" | tail -1)
+
+            if [[ -n "$last_metrics" ]]; then
+                # Extract step number — nnscaler format: "step X" or "Step X" or "steps=X"
+                step_match=$(tail -200 "$log_file" 2>/dev/null | grep -oP '(?:step[s]?\s*[=:]\s*|Step\s+)\K[0-9]+' | tail -1)
+                [[ -n "$step_match" ]] && step="$step_match"
+            fi
+
+            # Try parsing loss from log lines — nnscaler logs "train_loss: X.XXX"
+            loss_match=$(tail -200 "$log_file" 2>/dev/null | grep -oP 'train_loss["\s:=]+\K[0-9]+\.[0-9]+' | tail -1)
+            [[ -n "$loss_match" ]] && loss="$loss_match"
+
+            # gnorm
+            gnorm_match=$(tail -200 "$log_file" 2>/dev/null | grep -oP 'gnorm["\s:=]+\K[0-9]+\.[0-9]+' | tail -1)
+            [[ -n "$gnorm_match" ]] && gnorm="$gnorm_match"
+
+            # throughput
+            tput_match=$(tail -200 "$log_file" 2>/dev/null | grep -oP 'throughput["\s:=]+\K[0-9]+\.?[0-9]*' | tail -1)
+            [[ -n "$tput_match" ]] && throughput="$tput_match"
+
+            # lr
+            lr_match=$(tail -200 "$log_file" 2>/dev/null | grep -oP '"lr"["\s:=]+\K[0-9]+\.?[0-9eE\-]+' | tail -1)
+            [[ -n "$lr_match" ]] && lr="$lr_match"
+        else
+            status="${RED}NO LOG${NC}"
+        fi
+
+        printf "%-30s %-8s $(echo -e $status)  %-10s %-12s %-10s %-10s\n" \
+            "$name" "$pid" "$step" "$loss" "$gnorm" "$throughput"
+    done < "$PID_FILE"
+
+    echo ""
+
+    # -------- ETA estimation --------
+    echo -e "${BOLD}--- ETA Estimation ---${NC}"
+    MAX_UPDATES=10000
+
+    while IFS=' ' read -r pid name; do
+        [[ -z "$pid" ]] && continue
+        log_file="${LOG_DIR}/${name}.log"
+        if [[ ! -f "$log_file" ]]; then
+            continue
+        fi
+
+        # Try to find the current step and wall time
+        current_step=$(tail -200 "$log_file" 2>/dev/null | grep -oP '(?:step[s]?\s*[=:]\s*|Step\s+)\K[0-9]+' | tail -1)
+        if [[ -z "$current_step" || "$current_step" == "0" ]]; then
+            echo -e "  ${name}: ${YELLOW}not started yet${NC}"
+            continue
+        fi
+
+        # Try to get wall time per step from train_wall metric
+        wall_time=$(tail -200 "$log_file" 2>/dev/null | grep -oP 'train_wall["\s:=]+\K[0-9]+\.?[0-9]*' | tail -1)
+        if [[ -n "$wall_time" ]]; then
+            remaining_steps=$((MAX_UPDATES - current_step))
+            # Use awk for floating point arithmetic
+            eta_seconds=$(echo "$remaining_steps $wall_time" | awk '{printf "%.0f", $1 * $2}')
+            eta_hours=$(echo "$eta_seconds" | awk '{printf "%.1f", $1 / 3600}')
+            progress=$(echo "$current_step $MAX_UPDATES" | awk '{printf "%.1f", $1 / $2 * 100}')
+            echo -e "  ${name}: step ${current_step}/${MAX_UPDATES} (${progress}%) — ETA: ~${eta_hours}h"
+        else
+            progress=$(echo "$current_step $MAX_UPDATES" | awk '{printf "%.1f", $1 / $2 * 100}')
+            echo -e "  ${name}: step ${current_step}/${MAX_UPDATES} (${progress}%)"
+        fi
+    done < "$PID_FILE"
+
+    echo ""
+
+    # -------- GPU utilization --------
+    if command -v nvidia-smi &>/dev/null; then
+        echo -e "${BOLD}--- GPU Utilization ---${NC}"
+        nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu \
+            --format=csv,noheader,nounits 2>/dev/null | \
+        while IFS=',' read -r idx gname util mem_used mem_total temp; do
+            util=$(echo "$util" | xargs)
+            mem_used=$(echo "$mem_used" | xargs)
+            mem_total=$(echo "$mem_total" | xargs)
+            temp=$(echo "$temp" | xargs)
+            mem_pct=$(echo "$mem_used $mem_total" | awk '{printf "%.0f", $1/$2*100}')
+            printf "  GPU %s: %3s%% util | %s/%s MB (%s%%) | %s°C\n" \
+                "$idx" "$util" "$mem_used" "$mem_total" "$mem_pct" "$temp"
+        done
+        echo ""
+    fi
+}
+
+# -------- main --------
+if $WATCH; then
+    while true; do
+        clear
+        show_status
+        echo -e "${YELLOW}Refreshing every ${INTERVAL}s... (Ctrl+C to stop)${NC}"
+        sleep "$INTERVAL"
+    done
+else
+    show_status
+fi

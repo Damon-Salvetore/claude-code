@@ -1,0 +1,51 @@
+import math
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import nnscaler
+
+from .linear import MixPrecisionLinear, mix_precision_linear
+from kernel.nvfp4_quant import nvfp4_fake_quant
+
+@torch.compile
+def swiglu(x: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+    return x * F.silu(gate)
+
+nnscaler.register_op('l d, l d -> l d')(swiglu)
+
+class FeedForwardNetwork(nn.Module):
+    def __init__(
+        self,
+        embed_dim,
+        ffn_dim,
+        nvfp4_mode=0,
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.nvfp4_mode = nvfp4_mode
+        self.up_proj = MixPrecisionLinear(self.embed_dim, ffn_dim, bias=False)
+        self.down_proj = MixPrecisionLinear(ffn_dim, self.embed_dim, bias=False)
+        self.gate_proj = MixPrecisionLinear(self.embed_dim, ffn_dim, bias=False)
+        self.init_weights()
+
+    def init_weights(self):
+        nn.init.kaiming_uniform_(self.up_proj.weight, a=math.sqrt(5), mode='fan_in')
+        nn.init.kaiming_uniform_(self.gate_proj.weight, a=math.sqrt(5), mode='fan_in')
+        nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5), mode='fan_out')
+
+    def forward(self, x):
+        if self.nvfp4_mode >= 1:
+            # NVFP4 W4A4 fake quantization for Dense FFN
+            # A4: input activation fake quant
+            x_fq = nvfp4_fake_quant(x)
+            # W4: weight fake quant + MixPrecision forward (bf16 forward, fp32 grad)
+            up = mix_precision_linear(x_fq, nvfp4_fake_quant(self.up_proj.weight))
+            gate = mix_precision_linear(x_fq, nvfp4_fake_quant(self.gate_proj.weight))
+            intermediate = swiglu(up, gate)
+            # A4: intermediate activation fake quant before down_proj
+            inter_fq = nvfp4_fake_quant(intermediate)
+            # W4: down_proj weight fake quant
+            return mix_precision_linear(inter_fq, nvfp4_fake_quant(self.down_proj.weight))
+        else:
+            return self.down_proj(swiglu(self.up_proj(x), self.gate_proj(x)))

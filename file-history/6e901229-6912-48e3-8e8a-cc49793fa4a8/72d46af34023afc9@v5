@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# test_all_12.sh — 串行跑 12 个实验（4 模型 × 3 模式，每个 5000 步）
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export MAX_UPDATES=5000
+
+MODELS=("Base-0.4B" "GatedAttn-0.4B" "DiffAttn-0.4B" "GatedDiffAttn-0.4B")
+MODES=("baseline" "nvfp4" "nvfp4_full")
+
+TOTAL=$((${#MODELS[@]} * ${#MODES[@]}))
+PASS=0
+FAIL=0
+COUNT=0
+
+echo "============================================="
+echo "  12 experiments × max_updates=${MAX_UPDATES}"
+echo "  Start: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "============================================="
+
+for model in "${MODELS[@]}"; do
+    for mode in "${MODES[@]}"; do
+        COUNT=$((COUNT + 1))
+        echo ""
+        echo "[$COUNT/$TOTAL] ${model} ${mode}"
+        echo "Start: $(date '+%Y-%m-%d %H:%M:%S')"
+
+        bash "${SCRIPT_DIR}/run_single.sh" "$model" "$mode" && rc=0 || rc=$?
+
+        if [[ $rc -eq 0 ]]; then
+            echo "Result: SUCCESS (exit code 0)"
+            PASS=$((PASS + 1))
+        else
+            echo "Result: FAILED (exit code $rc)"
+            FAIL=$((FAIL + 1))
+        fi
+        echo "End: $(date '+%Y-%m-%d %H:%M:%S')"
+
+        # GPU cleanup check
+        gpu_pids=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | wc -l)
+        if [[ $gpu_pids -gt 0 ]]; then
+            echo "WARNING: GPU not released, force killing..."
+            nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+            sleep 5
+        fi
+    done
+done
+
+echo ""
+echo "============================================="
+echo "  Results: PASS=$PASS, FAIL=$FAIL / $TOTAL"
+if [[ $FAIL -eq 0 ]]; then
+    echo "  ✓ ALL 12 PASSED"
+else
+    echo "  ✗ $FAIL FAILED"
+fi
+echo "  End: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "============================================="

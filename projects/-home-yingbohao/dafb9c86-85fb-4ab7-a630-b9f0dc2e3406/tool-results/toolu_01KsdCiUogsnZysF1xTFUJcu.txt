@@ -1,0 +1,14 @@
+total 52
+drwxrwxr-x  7 yingbohao yingbohao 4096 Mar  3 05:05 .
+drwxr-x--- 12 yingbohao yingbohao 4096 Mar  3 13:48 ..
+-rw-rw-r--  1 yingbohao yingbohao  368 Mar  3 05:05 .amltconfig
+-rw-rw-r--  1 yingbohao yingbohao   47 Mar  3 05:05 .amltignore
+drwxrwxr-x  8 yingbohao yingbohao 4096 Mar  3 05:05 .git
+-rw-rw-r--  1 yingbohao yingbohao   56 Mar  3 05:05 .gitignore
+-rw-rw-r--  1 yingbohao yingbohao  962 Mar  3 05:05 Dockerfile
+-rw-rw-r--  1 yingbohao yingbohao   11 Mar  3 05:05 README.md
+drwxrwxr-x  2 yingbohao yingbohao 4096 Mar  3 05:05 data_tool
+-rw-rw-r--  1 yingbohao yingbohao 3071 Mar  3 05:05 deepep.md
+drwxrwxr-x  6 yingbohao yingbohao 4096 Mar  3 05:05 llm
+drwxrwxr-x  4 yingbohao yingbohao 4096 Mar  3 05:05 scripts
+drwxrwxr-x  6 yingbohao yingbohao 4096 Mar  3 05:05 yamls

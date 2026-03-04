@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------
+# wait_and_run_all.sh — 等当前实验跑完后启动全部 12 个实验
+#
+# 逻辑：
+# 1. 等待当前 run_single.sh 进程结束（如有）
+# 2. 启动 run_all_12.sh（会自动跳过已完成的实验）
+# ---------------------------------------------------------------
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for any running run_single.sh to finish..."
+
+# 等待当前 run_single.sh 子进程结束
+while pgrep -f "run_single.sh" >/dev/null 2>&1; do
+    # 打印当前训练进度
+    LOG=$(ls -t logs/Base-0.4B-nvfp4.log 2>/dev/null | head -1)
+    if [[ -n "$LOG" ]]; then
+        STEP=$(grep -oP '\d+/50000000' "$LOG" 2>/dev/null | tail -1)
+        LOSS=$(grep -oP 'train_loss=[\d.]+' "$LOG" 2>/dev/null | tail -1)
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Still running... ${STEP:-?} ${LOSS:-?}"
+    fi
+    sleep 60
+done
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Previous experiment done. Starting run_all_12.sh..."
+echo ""
+
+exec bash "${SCRIPT_DIR}/run_all_12.sh"

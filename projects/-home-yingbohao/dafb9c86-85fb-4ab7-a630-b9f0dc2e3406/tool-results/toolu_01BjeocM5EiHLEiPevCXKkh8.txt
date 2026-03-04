@@ -1,0 +1,84 @@
+   350→        use_zero=True,
+   351→        use_end2end=True,
+   352→        zero_ngroups=zero_ngroups,
+   353→        use_async_reducer=args.use_async_reducer,
+   354→        reducer_bucket_cap_mb=args.reducer_bucket_cap_mb if args.use_async_reducer else None,
+   355→        reducer_pre_divisor=args.reducer_pre_divisor,
+   356→        accumulate_allreduce_grads_in_fp32=args.accumulate_allreduce_grads_in_fp32,
+   357→        pas_config={
+   358→            'mem_constraint': args.gpu_mem_constraint,
+   359→            'pipeline_pivots': args.pipeline_pivots,
+   360→            'pipeline_nstages': args.pipeline_nstages,
+   361→            'recompute_modules': args.recompute_modules,
+   362→            'recompute_ratio': args.recompute_ratio,
+   363→            're_profile': args.re_profile,
+   364→            'parallel_profile': not args.disable_parallel_profile,
+   365→            'partition_constraints_path': args.partition_constraints_path,
+   366→            'disable_shared_param_constraint': args.disable_shared_param_constraint,
+   367→            'profile_dir': args.profile_dir,
+   368→        },
+   369→        trace_strategy=args.trace_strategy,
+   370→    )
+   371→
+   372→    def dummy_sample_gen_fn(trainer_args):
+   373→        seqlen = model_args.max_seq_len
+   374→        bsz = model_args.batch_size
+   375→        if model_args.dp_sharded:
+   376→            bsz = bsz * args.plan_ngpus
+   377→        input_ids = torch.randint(0, 1000, (seqlen * bsz + 1,))
+   378→        tokens = input_ids[:-1].clone()
+   379→        targets = input_ids[1:].clone()
+   380→        positions = torch.cat([torch.arange(0, seqlen) for _ in range(bsz)])
+   381→        seqlens = [i * seqlen for i in range(bsz + 1)]
+   382→        context = {
+   383→            'positions': positions,
+   384→            'cu_seqlens_q': torch.tensor(seqlens, dtype=torch.int32),
+   385→            'cu_seqlens_k': torch.tensor(seqlens, dtype=torch.int32),
+   386→            'max_seqlen_q': seqlen,
+   387→            'max_seqlen_k': seqlen,
+   388→        }
+   389→        dummy_forward_args = {
+   390→            'tokens': tokens,
+   391→            'context': context,
+   392→            'targets': targets,
+   393→            # note if loss_mask here is a float tensor, nnscaler will have problems when generating
+   394→            # call to the executor
+   395→            'loss_mask': torch.ones_like(tokens),
+   396→            'loss_index': torch.zeros_like(tokens),
+   397→            'tag_index': torch.zeros_like(tokens),
+   398→            'dataset_length': 1,
+   399→            'tag_length': 1,
+   400→        }
+   401→        return dummy_forward_args
+   402→
+   403→    def backbone_forward_args_gen_fn(trainer_args):
+   404→        return {'samples': dummy_sample_gen_fn(trainer_args)}
+   405→
+   406→    backbone_config = ModuleParallelizeConfig(
+   407→        type=BackBone,
+   408→        forward_args_gen_fn=backbone_forward_args_gen_fn,
+   409→    )
+   410→    model_config = ModelConfig(
+   411→        type=WrapperModel,
+   412→        args={
+   413→            'model_args': asdict(model_args),
+   414→            'xentropy_chunk_size': args.xentropy_chunk_size,
+   415→            'xentropy_recompute': args.xentropy_recompute,
+   416→            'precision': args.precision,
+   417→        },
+   418→        parallel_modules=[backbone_config,],
+   419→    )
+   420→
+   421→    # optimizer hyperparameters are from YaRN
+   422→    # optimizer_config = OptimizerConfig(
+   423→    #     type=torch.optim.AdamW if args.precision == 'fp32' else MixedPrecisionAdamW,
+   424→    #     args={'lr': trainer_args.learning_rate, 'betas': (trainer_args.beta1, trainer_args.beta2), 'weight_decay': trainer_args.weight_decay, 'fused': True, 'eps': 1e-8},
+   425→    #     clip_gnorm=trainer_args.clip_grad_norm,
+   426→    #     loss_reduction='sum',
+   427→    #     grad_reduction='per-token-mean',
+   428→    #     aggregate_outputs_fn=aggregate_outputs_fn,
+   429→    # )
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------
+# run_all_sequential.sh — 串行跑全部 8 个实验，自动化版
+# 跳过已经在跑或已完成的实验（通过检查日志判断）
+# ---------------------------------------------------------------
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOG_DIR="${PROJECT_DIR}/logs"
+
+mkdir -p "$LOG_DIR"
+
+MODELS=("Base-0.4B" "GatedAttn-0.4B" "DiffAttn-0.4B" "GatedDiffAttn-0.4B")
+MODES=("baseline" "nvfp4")
+
+TOTAL=$((${#MODELS[@]} * ${#MODES[@]}))
+COUNT=0
+FAILED=0
+
+echo "============================================="
+echo "  NVFP4 Sequential Experiment Runner"
+echo "  Start time: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  Total experiments: ${TOTAL}"
+echo "============================================="
+echo ""
+
+for model in "${MODELS[@]}"; do
+    for mode in "${MODES[@]}"; do
+        COUNT=$((COUNT + 1))
+        run_name="${model}-${mode}"
+        log_file="${LOG_DIR}/${run_name}.log"
+
+        echo "============================================="
+        echo "  [${COUNT}/${TOTAL}] ${run_name}"
+        echo "  $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "============================================="
+
+        # Check if this experiment already completed (log contains step 10000 or "finished")
+        if [[ -f "$log_file" ]]; then
+            last_step=$(grep -oP '(?<=\| )\d+(?=/50000000)' "$log_file" 2>/dev/null | tail -1 || echo "0")
+            if [[ "$last_step" -ge 10000 ]]; then
+                echo "  SKIP: Already completed (found step ${last_step})"
+                echo ""
+                continue
+            fi
+        fi
+
+        echo "  Starting..."
+        bash "${SCRIPT_DIR}/run_single.sh" "$model" "$mode"
+        exit_code=$?
+
+        if [[ $exit_code -ne 0 ]]; then
+            echo "  FAILED with exit code ${exit_code}"
+            FAILED=$((FAILED + 1))
+        else
+            echo "  COMPLETED successfully"
+        fi
+        echo ""
+    done
+done
+
+echo "============================================="
+echo "  All experiments finished!"
+echo "  End time: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  Failed: ${FAILED}/${TOTAL}"
+echo "============================================="
+echo ""
+echo "Collect results: python scripts/nvfp4_experiment/collect_results.py"

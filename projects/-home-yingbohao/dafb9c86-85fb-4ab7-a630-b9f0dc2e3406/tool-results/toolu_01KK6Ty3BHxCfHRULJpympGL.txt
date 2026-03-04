@@ -1,0 +1,1259 @@
+     1→# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+     2→# SPDX-License-Identifier: Apache-2.0
+     3→#
+     4→# Licensed under the Apache License, Version 2.0 (the "License");
+     5→# you may not use this file except in compliance with the License.
+     6→# You may obtain a copy of the License at
+     7→#
+     8→# http://www.apache.org/licenses/LICENSE-2.0
+     9→#
+    10→# Unless required by applicable law or agreed to in writing, software
+    11→# distributed under the License is distributed on an "AS IS" BASIS,
+    12→# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    13→# See the License for the specific language governing permissions and
+    14→# limitations under the License.
+    15→
+    16→"""Module for advanced quantization algorithms."""
+    17→
+    18→import fnmatch
+    19→import gc
+    20→import types
+    21→import warnings
+    22→from abc import ABC, abstractmethod
+    23→from collections import defaultdict
+    24→from collections.abc import Callable, Sequence
+    25→from contextlib import nullcontext
+    26→from typing import Any
+    27→
+    28→import regex as re
+    29→import torch
+    30→import torch.nn as nn
+    31→from tqdm import tqdm
+    32→
+    33→from modelopt.torch.opt.conversion import ModeloptStateManager
+    34→from modelopt.torch.opt.hparam import CustomHPType, Hparam, HPType
+    35→from modelopt.torch.opt.searcher import LPS, BaseSearcher, SearchConfig, SearchStateDict
+    36→from modelopt.torch.opt.utils import get_hparam, named_hparams
+    37→from modelopt.torch.utils import create_param_grad_clear_hook, print_rank_0, report_memory
+    38→from modelopt.torch.utils.distributed import DistributedProcessGroup, ParallelState, is_master
+    39→
+    40→from . import config as mtq_config
+    41→from . import model_calib
+    42→from .config import QuantizeConfig, QuantizerAttributeConfig
+    43→from .conversion import set_quantizer_by_cfg
+    44→from .nn import QuantLinearConvBase, QuantModule, SequentialQuantizer, TensorQuantizer
+    45→from .utils import is_quantized_linear
+    46→
+    47→
+    48→def estimate_quant_compression(quant_cfg: QuantizeConfig) -> float:
+    49→    """Estimate the compression ratio of a quantization configuration.
+    50→
+    51→    Right now, we find the minimum compression ratio across all quantizer attribute configs.
+    52→    This is not perfect but is a good proxy for the overall compression ratio. We will improve
+    53→    this in future releases.
+    54→
+    55→    Args:
+    56→        quant_cfg: The quantization configuration to estimate compression for.
+    57→
+    58→    Returns:
+    59→        float: The estimated compression ratio (0.0 to 1.0).
+    60→    """
+    61→
+    62→    def estimate_quant_compression_for_quantizer(quantizer_attr_cfg):
+    63→        if isinstance(quantizer_attr_cfg, list):
+    64→            return min(estimate_quant_compression_for_quantizer(q) for q in quantizer_attr_cfg)
+    65→        if isinstance(quantizer_attr_cfg, dict):
+    66→            return estimate_quant_compression_for_quantizer(list(quantizer_attr_cfg.values()))
+    67→
+    68→        if isinstance(quantizer_attr_cfg, QuantizerAttributeConfig):
+    69→            if not quantizer_attr_cfg.enable:
+    70→                return 1.0
+    71→            if not hasattr(quantizer_attr_cfg, "num_bits"):
+    72→                return 1.0
+    73→            if isinstance(quantizer_attr_cfg.num_bits, tuple):
+    74→                return (sum(quantizer_attr_cfg.num_bits) + 1) / 16
+    75→            elif isinstance(quantizer_attr_cfg.num_bits, int):
+    76→                return quantizer_attr_cfg.num_bits / 16
+    77→            else:
+    78→                raise ValueError(f"Unknown quantization config {quantizer_attr_cfg.num_bits}")
+    79→
+    80→        raise ValueError(f"Unknown type {type(quantizer_attr_cfg)}, {quantizer_attr_cfg}")
+    81→
+    82→    return estimate_quant_compression_for_quantizer(list(quant_cfg.quant_cfg.values()))
+    83→
+    84→
+    85→class QuantRecipe(CustomHPType):
+    86→    """A subclass of QuantizeConfig enabling auto_quantize specific configurations.
+    87→
+    88→    Args:
+    89→        quant_cfg: str or dict or None. dict is used for custom quantization formats.
+    90→        name: name for custom quantization formats. Only used if quantization format is a custom
+    91→            format not available in :mod:`modelopt.torch.quantization.config`.
+    92→    """
+    93→
+    94→    def __init__(self, quant_cfg: str | dict[str, Any] | None = None, name: str | None = None):
+    95→        """Initialize the QuantRecipe with the quantization configuration."""
+    96→        name = self.get_auto_name_for_config(quant_cfg) or name
+    97→
+    98→        if quant_cfg is None:
+    99→            quant_cfg = {"quant_cfg": {"*": {"enable": False}}}
+   100→        elif isinstance(quant_cfg, str):
+   101→            assert hasattr(mtq_config, quant_cfg), f"Unknown quantization format {quant_cfg}"
+   102→            quant_cfg = getattr(mtq_config, quant_cfg)
+   103→        else:
+   104→            assert name is not None, "name must be provided for custom quantization formats"
+   105→
+   106→        self.config = mtq_config.QuantizeConfig(**quant_cfg)  # type: ignore [arg-type]
+   107→
+   108→        # Disable KV Cache quantization
+   109→        # Currently KV Cache quantization is enabled for some quantization formats and disabled for others
+   110→        # This breaks the monotonicity of the quantization formats in terms of weight compression Vs accuracy
+   111→        self.config.quant_cfg["*output_quantizer"] = mtq_config.QuantizerAttributeConfig(
+   112→            enable=False
+   113→        )
+   114→
+   115→        self.compression = estimate_quant_compression(self.config)
+   116→
+   117→        self._str_repr: str = f"{name}(effective-bits: {self.compression * 16})"
+   118→
+   119→    @staticmethod
+   120→    def get_auto_name_for_config(quant_cfg: str | dict[str, Any] | None) -> str | None:
+   121→        """Get a name for the quantization configuration."""
+   122→        if quant_cfg is None:
+   123→            return "NONE"
+   124→        if isinstance(quant_cfg, str):
+   125→            return quant_cfg
+   126→        for quant_cfg_name in mtq_config.choices:
+   127→            if quant_cfg == getattr(mtq_config, quant_cfg_name):
+   128→                return quant_cfg_name
+   129→        return None
+   130→
+   131→    @property
+   132→    def num_bits(self) -> int:
+   133→        """Get the number of bits for the quantization format."""
+   134→        return int(self.compression * 16)
+   135→
+   136→    def __str__(self) -> str:
+   137→        return self._str_repr
+   138→
+   139→    def __repr__(self) -> str:
+   140→        return self._str_repr
+   141→
+   142→    def __lt__(self, other: "QuantRecipe"):
+   143→        return self.compression < other.compression
+   144→
+   145→    def __eq__(self, other: object):
+   146→        assert isinstance(other, QuantRecipe)
+   147→        return self._str_repr == other._str_repr
+   148→
+   149→    def __hash__(self) -> int:
+   150→        return hash(self._str_repr)
+   151→
+   152→    @staticmethod
+   153→    def disable_folding_pqs_to_weights():
+   154→        """Disable the folding of pre_quant_scale to weights."""
+   155→        model_calib._ENABLE_FOLDING_PQS_TO_WEIGHTS = False
+   156→
+   157→    @staticmethod
+   158→    def fold_pqs_to_weights(model):
+   159→        """Fold the pre_quant_scale in weight_quantizers to weights."""
+   160→        model_calib._ENABLE_FOLDING_PQS_TO_WEIGHTS = True
+   161→        for name, module in model.named_modules():
+   162→            if is_quantized_linear(module):
+   163→                with SequentialQuantizer.convert_to_single_quantizer(model):
+   164→                    if module.weight_quantizer.pre_quant_scale is not None:
+   165→                        weight_pqs = module.weight_quantizer.pre_quant_scale
+   166→                        delattr(module.weight_quantizer, "_pre_quant_scale")
+   167→                        model_calib._apply_weight_pre_quant_scale(module, weight_pqs)
+   168→
+   169→
+   170→class QuantRecipeHparam(Hparam):
+   171→    """An Hparam for quantization recipes.
+   172→
+   173→    See :class:`Hparam <modelopt.torch.opt.hparam.Hparam>` for more details. In addition, this Hparam also:
+   174→
+   175→    * Keeps a link to its ``quant_modules`` and ``score_modules`` and sets the quantizers for the
+   176→      ``quant_modules`` based on the active recipe.
+   177→    * Provides ``get_score()`` and ``get_cost()`` methods to evaluate recipes.
+   178→    * Registers itself with each ``score_module`` via the ``_hparams_for_scoring`` attribute.
+   179→    """
+   180→
+   181→    def __init__(
+   182→        self,
+   183→        choices: Sequence[QuantRecipe] | None = None,
+   184→        quant_modules: list[nn.Module] | None = None,
+   185→        score_modules: list[nn.Module] | None = None,
+   186→        name: str | None = None,
+   187→    ) -> None:
+   188→        """Initializes Hparam with original value and choices."""
+   189→        choices = sorted({*(choices if choices else []), QuantRecipe(quant_cfg=None)})
+   190→        super().__init__(choices, original=choices[0])
+   191→
+   192→        self.name = name
+   193→
+   194→        self.quant_modules = list(set(quant_modules or []))
+   195→        self.score_modules = list(set(score_modules or self.quant_modules))
+   196→
+   197→        # This is a hack; We dont want to make the input_quantizer, weight_quantizer, output_quantizer
+   198→        # a dynamic attribute for backward compatibility with the model_calib.py
+   199→        # TODO: Make input_quantizer, weight_quantizer, output_quantizer a dynamic attribute and get rid of this hack
+   200→        self._all_quantizer_choices = {quant_recipe: {} for quant_recipe in self.choices}
+   201→
+   202→        quant_recipe: QuantRecipe
+   203→        for quant_recipe in self.choices:
+   204→            for quant_module in self.quant_modules:
+   205→                for quantizer_attr_name in [
+   206→                    "input_quantizer",
+   207→                    "weight_quantizer",
+   208→                    "output_quantizer",
+   209→                ]:
+   210→                    setattr(quant_module, quantizer_attr_name, TensorQuantizer())
+   211→
+   212→                set_quantizer_by_cfg(quant_module, quant_recipe.config.quant_cfg)
+   213→                self._all_quantizer_choices[quant_recipe][quant_module] = {
+   214→                    quantizer_attr_name: getattr(quant_module, quantizer_attr_name)
+   215→                    for quantizer_attr_name in [
+   216→                        "input_quantizer",
+   217→                        "weight_quantizer",
+   218→                        "output_quantizer",
+   219→                    ]
+   220→                }
+   221→
+   222→        self.active = self.original
+   223→
+   224→        # Importance dict is keyed by score_module (where the score is computed)
+   225→        self._importance_dict = {
+   226→            quant_recipe: dict.fromkeys(self.score_modules) for quant_recipe in self.choices
+   227→        }
+   228→
+   229→        # Attach this hparam to each score_module's set of hparams it scores
+   230→        for score_module in self.score_modules:
+   231→            if not hasattr(score_module, "_hparams_for_scoring"):
+   232→                score_module._hparams_for_scoring = set()
+   233→            score_module._hparams_for_scoring.add(self)
+   234→
+   235→    @property
+   236→    def active(self) -> HPType:
+   237→        """Return the currently active value."""
+   238→        return self._active
+   239→
+   240→    @active.setter
+   241→    def active(self, val: HPType | None):
+   242→        """Set the active value with a sanity check for choices and dynamic hparams."""
+   243→        val = self.original if val is None else val
+   244→        assert val in self._choices, f"val = {val}, choices = {self.choices}"
+   245→        if self.is_configurable:
+   246→            self._active = val
+   247→        else:
+   248→            assert self._active == val
+   249→
+   250→        for nn_module, quantizer_choices in self._all_quantizer_choices[val].items():
+   251→            for quantizer_attr_name, quantizer in quantizer_choices.items():
+   252→                setattr(nn_module, quantizer_attr_name, quantizer)
+   253→
+   254→    @property
+   255→    def importance(self) -> dict:
+   256→        """Raises an error since this is not a useful abstraction for AutoQuantize."""
+   257→        raise NotImplementedError
+   258→
+   259→    def get_score(self, recipe: QuantRecipe) -> float:
+   260→        """Get the score for a given recipe."""
+   261→        total_score = 0
+   262→        for score_module in self.score_modules:
+   263→            importance = self._importance_dict[recipe][score_module]
+   264→            if importance is None:
+   265→                continue
+   266→
+   267→            parallel_state = getattr(score_module, "parallel_state", None)
+   268→
+   269→            if parallel_state is None:
+   270→                total_score += importance.cpu().item()
+   271→                continue
+   272→
+   273→            if parallel_state.expert_model_parallel_group.is_initialized():
+   274→                # TODO: Support expert model parallelism for score estimation
+   275→                warnings.warn("AutoQuantize does not support expert model parallelism yet.")
+   276→            importance = importance.cpu()
+   277→            importance = DistributedProcessGroup.get_dist_syncd_obj(
+   278→                importance,
+   279→                [parallel_state.tensor_parallel_group, parallel_state.data_parallel_group],
+   280→                sum,
+   281→            )
+   282→            total_score += importance.item()
+   283→        return total_score
+   284→
+   285→    def get_cost(self, recipe: QuantRecipe) -> float:
+   286→        """Get the cost for a given recipe.
+   287→
+   288→        The cost is the total weight size of the quantizable modules multiplied by
+   289→        the compression ratio of the recipe.
+   290→        """
+   291→        cost = 0
+   292→        for quant_module in self.quant_modules:
+   293→            weight_size = _AutoQuantizeBaseSearcher._get_total_weight_size([quant_module])
+   294→            parallel_state = getattr(quant_module, "parallel_state", None)
+   295→
+   296→            if parallel_state is None:
+   297→                cost += weight_size * recipe.compression
+   298→                continue
+   299→
+   300→            if parallel_state.expert_model_parallel_group.is_initialized():
+   301→                # TODO: Support expert model parallelism
+   302→                warnings.warn("AutoQuantize does not support expert model parallelism yet.")
+   303→
+   304→            weight_size = DistributedProcessGroup.get_dist_syncd_obj(
+   305→                weight_size,
+   306→                [parallel_state.tensor_parallel_group],
+   307→                sum,
+   308→            )
+   309→
+   310→            # Across data parallel groups, the weight size is the same for all the ranks.
+   311→            weight_size = DistributedProcessGroup.get_dist_syncd_obj(
+   312→                weight_size,
+   313→                [parallel_state.data_parallel_group],
+   314→                lambda a: a[0],
+   315→            )
+   316→            cost += weight_size * recipe.compression
+   317→
+   318→        return cost
+   319→
+   320→    @property
+   321→    def attrs(self) -> list[str]:
+   322→        """Return the attributes of the hparam for repr."""
+   323→        return ["name", *super().attrs]
+   324→
+   325→
+   326→class _AutoQuantizeBaseSearcher(BaseSearcher, ABC):
+   327→    """Base searcher for AutoQuantize algorithm."""
+   328→
+   329→    # This searcher finds optimal per-layer quantization by searching across quantization formats
+   330→    # for each quantizable module (quant module). Optionally, quant grouping rules can restrict
+   331→    # certain modules to share the same format. Sensitivity scores are computed from perturbations
+   332→    # at score modules. See AutoQuantizeGradientSearcher for detailed documentation.
+   333→
+   334→    candidate_stats: dict[str, dict[str, list[float]]]
+   335→    best: dict[str, Any]
+   336→
+   337→    quant_grouping_rules = [
+   338→        r"^(.*?)\.(q_proj|k_proj|v_proj)$",  # q_proj, k_proj, v_proj for llama like models
+   339→        # gate_proj, up_proj, down_proj for Qwen3 like MoE models
+   340→        r"^(.*?\.mlp\.experts)\.\d+\.(gate_proj|up_proj|down_proj)$",
+   341→        r"^(.*?)\.(gate_proj|up_proj)$",  # gate_proj, up_proj for llama like models
+   342→        r"^(.*?)\.(\d+\.(w1|w2|w3))$",  # mixtral experts
+   343→        r"^(.*?)\.((w1_linear|w2_linear|w3_linear)\.\d+)$",  # dbrx experts
+   344→    ]
+   345→
+   346→    score_module_rules = []
+   347→
+   348→    @property
+   349→    def default_search_config(self):
+   350→        """Get the default config for the searcher."""
+   351→        return {
+   352→            "quantization_formats": ["NVFP4_DEFAULT_CFG", "FP8_DEFAULT_CFG"],
+   353→            "data_loader": None,
+   354→            "num_calib_steps": 512,
+   355→            "num_score_steps": 128,
+   356→            "deployment": None,
+   357→            "disabled_layers": None,
+   358→            "verbose": is_master(),
+   359→            "checkpoint": None,
+   360→        }
+   361→
+   362→    @property
+   363→    def default_state_dict(self) -> SearchStateDict:
+   364→        """Get the default state dict for AutoQuantize."""
+   365→        return {
+   366→            "candidate_stats": defaultdict(dict),
+   367→            "best": {"recipe": {}, "constraints": {}, "score": float("inf"), "is_satisfied": False},
+   368→        }
+   369→
+   370→    def sanitize_search_config(self, config: SearchConfig | None) -> SearchConfig:
+   371→        """Sanitize the search config dict."""
+   372→        config = config or {}
+   373→        config = super().sanitize_search_config(config)
+   374→        assert config["data_loader"] is not None, (
+   375→            "`data_loader` must be provided for `auto_quantize`."
+   376→        )
+   377→        assert config["forward_step"] is not None, (
+   378→            "`forward_step` must be provided for `auto_quantize`."
+   379→        )
+   380→        return config
+   381→
+   382→    @staticmethod
+   383→    def _is_auto_quantize_module(module):
+   384→        return (
+   385→            is_quantized_linear(module) or isinstance(module, QuantLinearConvBase)
+   386→        ) and isinstance(module, QuantModule)
+   387→
+   388→    @staticmethod
+   389→    def _get_search_recipes(quantization_formats):
+   390→        return sorted(
+   391→            {
+   392→                QuantRecipe(quant_cfg=q[0], name=q[1])
+   393→                if isinstance(q, tuple)
+   394→                else QuantRecipe(quant_cfg=q)
+   395→                for q in quantization_formats
+   396→            }
+   397→        )
+   398→
+   399→    def _apply_quant_group_rule(self, name: str, rule) -> str | None:
+   400→        """Apply a single quant_group_rule to a module name.
+   401→
+   402→        Args:
+   403→            name: Module name
+   404→            rule: Either a regex pattern string or a callable that returns a unique key;
+   405→                If callable, it should take the model and the name as input and return the unique key
+   406→
+   407→        Returns:
+   408→            The group key if the rule matches, None otherwise
+   409→        """
+   410→        if callable(rule):
+   411→            return rule(self.model, name)
+   412→        else:
+   413→            # Regex pattern
+   414→            pattern = re.compile(rule)
+   415→            match = pattern.match(name)
+   416→            if match:
+   417→                return match.group(1)
+   418→        return None
+   419→
+   420→    def _apply_score_group_rule(self, name: str, rule) -> str | None:
+   421→        """Apply a single score_group_rule to a module name.
+   422→
+   423→        Args:
+   424→            name: Module name
+   425→            rule: Either a regex pattern string or a callable that returns the score module name.
+   426→                If callable, it should take the model and the name as input and return the score module name
+   427→
+   428→        Returns:
+   429→            The score module name if the rule matches, None otherwise
+   430→        """
+   431→        if callable(rule):
+   432→            return rule(self.model, name)
+   433→        else:
+   434→            # Regex pattern - return the matched name or full match
+   435→            pattern = re.compile(rule)
+   436→            match = pattern.match(name)
+   437→            if match:
+   438→                # For score rules, return the full match or first group
+   439→                return match.group(0) if match.lastindex is None else match.group(1)
+   440→        return None
+   441→
+   442→    def _get_score_module_from_name(
+   443→        self, model: nn.Module, score_module_name: str, quant_module: nn.Module
+   444→    ) -> nn.Module:
+   445→        """Get the actual score module object from its name.
+   446→
+   447→        Args:
+   448→            model: The model containing all modules
+   449→            score_module_name: The name of the score module to retrieve
+   450→            quant_module: The quantized module for which the score is estimated
+   451→
+   452→        Returns:
+   453→            The score module object, or the quantized module itself if the score module is not found
+   454→        """
+   455→        try:
+   456→            score_module = model.get_submodule(score_module_name)
+   457→            return score_module
+   458→        except AttributeError:
+   459→            warnings.warn(
+   460→                f"Score module '{score_module_name}' not found. Score will estimated from the quantized module itself."
+   461→            )
+   462→            return quant_module
+   463→
+   464→    def insert_hparams_after_merge_rules(self, model, quant_recipes, disabled_layers=None):
+   465→        """Restrict the search space using the merge rules and insert the hparams for the model."""
+   466→        # TRTLLM fuses linear layers such as q_proj, k_proj, v_proj into same layer
+   467→        # Hence we need to restrict the search space so that all these layers share the same recipe
+   468→        # Lets group the modules based on the rules and insert the same hparam for all the modules in the group
+   469→
+   470→        if disabled_layers is None:
+   471→            disabled_layers = []
+   472→        elif isinstance(disabled_layers, str):
+   473→            disabled_layers = [disabled_layers]
+   474→
+   475→        # Map from group key to list of (quant_module, name, disabled, score_module)
+   476→        search_map: dict[str, list[tuple[nn.Module, str, bool, nn.Module]]] = {}
+   477→
+   478→        for name, module in model.named_modules():
+   479→            if not self._is_auto_quantize_module(module):
+   480→                continue
+   481→
+   482→            # Skip layers that match disabled_layers patterns
+   483→            disabled = False
+   484→            for pattern in disabled_layers:
+   485→                if fnmatch.fnmatch(name, pattern):
+   486→                    disabled = True
+   487→                    break
+   488→
+   489→            # Apply quant_grouping_rules to determine the group key
+   490→            group_key = name  # Default: each module in its own group
+   491→            for rule in self.quant_grouping_rules:
+   492→                result = self._apply_quant_group_rule(name, rule)
+   493→                if result is not None:
+   494→                    group_key = result
+   495→                    # We support only one rule for matching per module
+   496→                    break
+   497→
+   498→            # Apply score_module_rules to determine the score module name, then get the actual module
+   499→            score_module_name = name  # Default: score from same module
+   500→            for rule in self.score_module_rules:
+   501→                result = self._apply_score_group_rule(name, rule)
+   502→                if result is not None:
+   503→                    score_module_name = result
+   504→                    # We support only one rule for matching per module
+   505→                    break
+   506→
+   507→            # Get the actual score module object immediately
+   508→            score_module = self._get_score_module_from_name(model, score_module_name, module)
+   509→
+   510→            if group_key not in search_map:
+   511→                search_map[group_key] = [(module, name, disabled, score_module)]
+   512→            else:
+   513→                search_map[group_key].append((module, name, disabled, score_module))
+   514→
+   515→        for group_key, module_info_list in search_map.items():
+   516→            quant_modules = [module for module, _, _, _ in module_info_list]
+   517→            disabled = any(disabled for _, _, disabled, _ in module_info_list)
+   518→            score_modules = [score_module for _, _, _, score_module in module_info_list]
+   519→
+   520→            quant_recipes = None if disabled else quant_recipes
+   521→            hparam = QuantRecipeHparam(
+   522→                quant_recipes,
+   523→                quant_modules=quant_modules,
+   524→                score_modules=score_modules,
+   525→                name=str(group_key),
+   526→            )
+   527→
+   528→            for module in quant_modules:
+   529→                module._register_hparam("quant_recipe", hparam)
+   530→
+   531→    def _get_formatted_weight_compression_constraint(self):
+   532→        effective_bits = self.constraints["effective_bits"]
+   533→        assert effective_bits > 0 and effective_bits <= 16, (
+   534→            "effective_bits should be between 0 and 16."
+   535→        )
+   536→        weight_compression = self.constraints["effective_bits"] / 16.0
+   537→
+   538→        return weight_compression
+   539→
+   540→    def _verify_constraint(self, search_recipes):
+   541→        assert self.constraints["effective_bits"] >= search_recipes[0].num_bits, (
+   542→            f"The effective_bits {self.constraints['effective_bits']} constraint cannot be lower than the "
+   543→            f"num_bits of most aggressive quantization format for this search which is "
+   544→            f"{search_recipes[0]} whose num_bits = {search_recipes[0].num_bits}."
+   545→        )
+   546→
+   547→    @abstractmethod
+   548→    def estimate_sensitivity_scores(self) -> None:
+   549→        """Estimate sensitivity scores and track them with Hparam."""
+   550→
+   551→    def initialize_candidate_stats(self):
+   552→        """Initialize the candidate stats for the model."""
+   553→        for name, hparam in named_hparams(self.model, unique=True):
+   554→            if not isinstance(hparam, QuantRecipeHparam):
+   555→                continue
+   556→
+   557→            formats, scores, costs = [], [], []
+   558→            prev_score = float("inf")
+   559→            for recipe in hparam.choices:
+   560→                formats.append(recipe)
+   561→
+   562→                score = hparam.get_score(recipe)  # type: ignore [arg-type]
+   563→                cost = hparam.get_cost(recipe)  # type: ignore [arg-type]
+   564→
+   565→                score = min(score, prev_score)  # TODO: Should we get rid of this?
+   566→                scores.append(score)
+   567→                costs.append(cost)
+   568→                prev_score = score
+   569→
+   570→            self.candidate_stats[name]["formats"] = formats
+   571→            self.candidate_stats[name]["scores"] = scores
+   572→            self.candidate_stats[name]["costs"] = costs
+   573→
+   574→    def _run_func(self, func, num_iters=1, desc=""):
+   575→        for i, data in tqdm(
+   576→            zip(range(num_iters), self.config["data_loader"]),
+   577→            desc=desc,
+   578→            total=num_iters,
+   579→        ):
+   580→            func(self.model, data)
+   581→
+   582→    def before_search(self):
+   583→        """Prepare the model for search by calibrating the quantizers  and collecting ``AutoQuantize`` score."""
+   584→        # Import here to avoid circular import
+   585→        from modelopt.torch.quantization.model_quant import calibrate
+   586→
+   587→        super().before_search()
+   588→
+   589→        search_recipes = self._get_search_recipes(self.config["quantization_formats"])
+   590→        self._verify_constraint(search_recipes)
+   591→        self.insert_hparams_after_merge_rules(
+   592→            self.model, search_recipes, self.config["disabled_layers"]
+   593→        )
+   594→
+   595→        QuantRecipe.disable_folding_pqs_to_weights()
+   596→
+   597→        # Iterate over the search recipes and calibrate the quantizers for each recipe
+   598→        for recipe in search_recipes:
+   599→            if recipe == QuantRecipe(quant_cfg=None):  # No-quant format
+   600→                continue
+   601→
+   602→            # Lets reduce the number of calibration steps for AWQ since it takes longer
+   603→            num_calib_steps = (
+   604→                self.config["num_calib_steps"]
+   605→                if "awq" not in str(recipe.config.algorithm)
+   606→                else max(1, self.config["num_calib_steps"] // 4)
+   607→            )
+   608→
+   609→            def forward_loop(model):
+   610→                self._run_func(
+   611→                    self.config["forward_step"],
+   612→                    num_iters=num_calib_steps,
+   613→                    desc=f"Calibrating for {recipe}",
+   614→                )
+   615→
+   616→            for name, hparam in named_hparams(self.model, configurable=True):
+   617→                if not isinstance(hparam, QuantRecipeHparam):
+   618→                    continue
+   619→                hparam.active = recipe
+   620→
+   621→            # Now calibrate the quantizers for the recipe
+   622→            calibrate(
+   623→                self.model,
+   624→                algorithm=recipe.config.algorithm,
+   625→                forward_loop=forward_loop,
+   626→            )
+   627→            # Calibrate adds a new mode to the model. Since auto_quantize mixes the quantization recipes
+   628→            # across layers, lets not save this new mode in the modelopt state.
+   629→            # TODO: This is a hack. We need to create a mode for auto_quantize to handle this in a clean way.
+   630→            ModeloptStateManager(self.model).state_dict().pop()
+   631→
+   632→        if self.candidate_stats:
+   633→            if self.config["verbose"]:
+   634→                print_rank_0("AutoQuantize: Restored from checkpoint, skipping scoring")
+   635→            return
+   636→
+   637→        self.estimate_sensitivity_scores()
+   638→        self.initialize_candidate_stats()
+   639→        # Save checkpoint after successful score estimation
+   640→        self.save_search_checkpoint(verbose=self.config["verbose"])
+   641→
+   642→    @staticmethod
+   643→    def _get_total_weight_size(modules):
+   644→        return sum(
+   645→            (
+   646→                module.weight.numel()
+   647→                if _AutoQuantizeBaseSearcher._is_auto_quantize_module(module)
+   648→                else 0
+   649→            )
+   650→            for module in modules
+   651→        )
+   652→
+   653→    def _get_constraints_for_search(self, max_weight_size, lower_bound=None):
+   654→        constraints = {
+   655→            "weight_size_after_compression": (
+   656→                lower_bound * max_weight_size if lower_bound else lower_bound,
+   657→                max_weight_size,
+   658→            )
+   659→        }
+   660→        return constraints, "weight_size_after_compression"
+   661→
+   662→    @abstractmethod
+   663→    def run_search_with_stats(self, max_weight_size, verbose=False):
+   664→        """Run the search with stats to get the best recipe and whether the constraints are satisfied."""
+   665→
+   666→    def run_search(self):
+   667→        """Search for the best per-layer quantization configuration and return the best model and configuration."""
+   668→        verbose = self.config["verbose"]
+   669→        assert len(self.constraints) == 1 and "effective_bits" in self.constraints, (
+   670→            f"`constraints` must contain only 'effective_bits' constraint. "
+   671→            f"Got {self.constraints.keys()}"
+   672→        )
+   673→
+   674→        compression = self._get_formatted_weight_compression_constraint()
+   675→        total_weight_size = self._get_total_weight_size(self.model.modules())
+   676→        max_weight_size = total_weight_size * compression
+   677→
+   678→        # Run the search with stats to get the best recipe and whether the constraints are satisfied
+   679→        best_recipe_info, is_satisfied = self.run_search_with_stats(max_weight_size, verbose)
+   680→        self.best["is_satisfied"] = is_satisfied
+   681→
+   682→        best_recipe = {}
+   683→        best_constraints, best_scores = 0, 0
+   684→        for name, best_hparam_recipe_info in best_recipe_info.items():
+   685→            # Solvers could give different solutions for the same layer across DP/TP groups even though
+   686→            # the scores and costs are the same. Lets make sure the same recipe is selected across DP/TP
+   687→            _ps = self.model.get_submodule(name.split(".quant_recipe")[0]).parallel_state
+   688→            best_format = DistributedProcessGroup.get_dist_syncd_obj(
+   689→                best_hparam_recipe_info["format"],
+   690→                [_ps.data_parallel_group, _ps.tensor_parallel_group],
+   691→                lambda a: a[0],
+   692→            )
+   693→
+   694→            best_recipe[name] = best_format
+   695→            get_hparam(self.model, name).active = best_format
+   696→            best_constraints += best_hparam_recipe_info["costs"]
+   697→            best_scores += best_hparam_recipe_info["scores"]
+   698→            if verbose:
+   699→                print_rank_0(
+   700→                    f"AutoQuantize best recipe for {name.replace('.quant_recipe', '')}: {best_recipe[name]}"
+   701→                )
+   702→
+   703→        effective_bits_from_search = (best_constraints / total_weight_size) * 16
+   704→        if verbose:
+   705→            print_rank_0(
+   706→                f"AutoQuantize effective bits from search: {effective_bits_from_search: .2f}"
+   707→            )
+   708→
+   709→        self.best["recipe"] = best_recipe
+   710→        self.best["constraints"] = {"effective_bits": effective_bits_from_search}
+   711→        self.best["score"] = best_scores
+   712→
+   713→        QuantRecipe.fold_pqs_to_weights(self.model)
+   714→
+   715→
+   716→def _get_auto_quantize_score(grad_output, output_diff):
+   717→    return ((grad_output.float() ** 2) * (output_diff.float() ** 2)).sum()
+   718→
+   719→
+   720→def _add_auto_quantize_score(grad_output, output_diff, score_tensor):
+   721→    score_tensor += _get_auto_quantize_score(grad_output, output_diff)
+   722→
+   723→
+   724→class AutoQuantizeGradientSearcher(_AutoQuantizeBaseSearcher):
+   725→    """A searcher for AutoQuantize algorithm that uses gradient based score estimation.
+   726→
+   727→    In AutoQuantize, we search for the best per-layer quantization configuration that minimizes the sum of per-layer
+   728→    scores while meeting the specified constraint. AutoQuantize uses Linear Programming Solver to find the
+   729→    optimal quantization configuration.
+   730→
+   731→    The auto_quantize score for a layer quantization configuration is an approximation of model loss change due
+   732→    to quantizing the particular layer with the particular configuration.
+   733→    The approximation is based on taylor expansion of the loss function wrt to the quantized output of the layer and
+   734→    substitution of Fisher information for Hessian.
+   735→    This approximation is mathematically correct for models where the loss
+   736→    is a log likelihood loss such as BERT, GPT, etc. However, the auto_quantize score can still be used as a proxy
+   737→    for other models such as ResNet.
+   738→
+   739→    **Quant Modules:**
+   740→
+   741→    This searcher operates on quantizable modules (quant modules), which are typically Linear or Conv layers
+   742→    that support quantization. Optionally, grouping rules can be applied to ensure certain layers share the same
+   743→    quantization format (e.g., Q, K, V projections in the same attention layer). For details on quant_grouping_rules
+   744→    and customization, see the :meth:`auto_quantize <modelopt.torch.quantization.model_quant.auto_quantize>`
+   745→    API documentation.
+   746→
+   747→    **Score Modules:**
+   748→
+   749→    By default, for each quant module, its sensitivity score is estimated using that module's output perturbation.
+   750→    However, the sensitivity can also be estimated by looking at perturbation at a separate point in the neural
+   751→    network (score module). This is helpful in some cases such as MoEs for speed and lower memory consumption.
+   752→    Since all experts are already restricted to the same quant format by quant grouping rules, their sensitivity
+   753→    can be estimated together at a single point (e.g., the MLP output level).
+   754→    """
+   755→
+   756→    score_module_rules = [
+   757→        # Use MLP layer output for gate_proj, up_proj, down_proj for Qwen3 like MoE models (local and shared experts)
+   758→        r"^(.*?\.mlp)\.experts\.\d+\.(gate_proj|up_proj|down_proj)$",
+   759→        r"^(.*?)\.(\d+\.(w1|w2|w3))$",  # mixtral experts
+   760→        r"^(.*?)\.((w1_linear|w2_linear|w3_linear)\.\d+)$",  # dbrx experts
+   761→    ]
+   762→
+   763→    # See `register_custom_support` for details
+   764→    _custom_support: list[tuple[Callable, Callable, Callable]] = []
+   765→
+   766→    @property
+   767→    def default_search_config(self):
+   768→        """Get the default config for the searcher."""
+   769→        config = super().default_search_config
+   770→        config.update(
+   771→            {
+   772→                "forward_step": None,
+   773→                "loss_func": None,
+   774→                "forward_backward_step": None,
+   775→            }
+   776→        )
+   777→        return config
+   778→
+   779→    def sanitize_search_config(self, config: SearchConfig | None) -> SearchConfig:
+   780→        """Sanitize the search config dict."""
+   781→        config = config or {}
+   782→        if "score_func" in config:
+   783→            warnings.warn("`score_func` is ignored for gradient based `auto_quantize`.")
+   784→            config.pop("score_func")
+   785→        config = super().sanitize_search_config(config)
+   786→        if config["forward_backward_step"] is None:
+   787→            assert config["loss_func"] is not None, (
+   788→                "`loss_func` or `forward_backward_step` must be provided for `auto_quantize`."
+   789→            )
+   790→            config["forward_backward_step"] = self._get_default_forward_backward_step()
+   791→
+   792→        return config
+   793→
+   794→    @classmethod
+   795→    def register_custom_support(
+   796→        cls,
+   797→        is_supported_checker: Callable,
+   798→        grad_ckpt_context: Callable,
+   799→        is_param_grad_enabled: Callable,
+   800→    ) -> None:
+   801→        """(Optional) Register custom support for `AutoQuantize` score estimation.
+   802→
+   803→        This custom support is used to enable memory/compute efficient backward gradient propagation. This involves:
+   804→
+   805→        - `grad_ckpt_context`: backward pass with gradient checkpointing enabled
+   806→        - `is_param_grad_enabled`: AutoQuantize only needs activation gradients to be computed (not weight
+   807→          gradients). `is_param_grad_enabled` is used to select which parameters should have gradients enabled,
+   808→          limiting gradient computation to only what's needed for activation gradients. For LLMs, to trigger all
+   809→          activation gradient computation, just enabling the embedding layer weight gradient is sufficient. This will
+   810→          enable gradient computation for all the activation gradients downstream.
+   811→
+   812→        If the `is_supported_checker(model)` returns True, the `grad_ckpt_context(model)` will be
+   813→        used to enable gradient checkpointing and `is_param_grad_enabled(pname, model)`
+   814→        will be used to select which parameters have gradients enabled to minimize gradient computation.
+   815→        """
+   816→        cls._custom_support.append((is_supported_checker, grad_ckpt_context, is_param_grad_enabled))
+   817→
+   818→    def _get_default_forward_backward_step(self):
+   819→        def forward_backward_step(model, data):
+   820→            output = self.config["forward_step"](model, data)
+   821→            loss = self.config["loss_func"](output, data)
+   822→            try:
+   823→                loss.backward()
+   824→            except RuntimeError as e:
+   825→                raise RuntimeError(
+   826→                    "AutoQuantize: Error while calling `backward()` on the loss returned by `loss_func`. "
+   827→                    "Please fix this!"
+   828→                    f"error: {e}"
+   829→                ) from e
+   830→
+   831→        return forward_backward_step
+   832→
+   833→    @torch.enable_grad()
+   834→    def _estimate_auto_quantize_scores(self, is_param_grad_enabled):
+   835→        # TODO: remove the no-quant recipe
+   836→        def auto_quantize_score_estimate_forward(module, input, *args, **kwargs):
+   837→            for hparam in module._hparams_for_scoring:
+   838→                if hparam.is_configurable:
+   839→                    hparam.active = QuantRecipe(quant_cfg=None)
+   840→
+   841→            output = module._forward_original(input, *args, **kwargs)
+   842→
+   843→            # If gradient checkpointing is enabled, gradient will not be enabled in the global forward pass.
+   844→            # With gradient checkpointing, gradients are computed in the local forward pass during backward pass
+   845→
+   846→            # Lets compute the output_diff and save it in memory only if gradient is enabled to be memory efficient
+   847→            if not torch.is_grad_enabled():
+   848→                return output
+   849→
+   850→            module.output_diff_dict = {hparam: {} for hparam in module._hparams_for_scoring}
+   851→            with torch.no_grad():
+   852→                for hparam in module._hparams_for_scoring:
+   853→                    if not hparam.is_configurable:
+   854→                        continue
+   855→                    for recipe in hparam.choices:
+   856→                        if recipe == QuantRecipe(quant_cfg=None):
+   857→                            continue
+   858→                        hparam.active = recipe
+   859→                        output_diff = module._forward_original(input, *args, **kwargs)
+   860→
+   861→                        if isinstance(output_diff, tuple):
+   862→                            output_diff = output_diff[0] - output[0]
+   863→                        else:
+   864→                            output_diff -= output
+   865→                        module.output_diff_dict[hparam][recipe] = output_diff.detach()
+   866→
+   867→                    # Disable the configurable hparam now that we have computed the diff
+   868→                    hparam.active = QuantRecipe(quant_cfg=None)
+   869→
+   870→            return output
+   871→
+   872→        def backward_hook(module, grad_input, grad_output):
+   873→            for hparam, output_diff_dict in module.output_diff_dict.items():
+   874→                for recipe, output_diff in output_diff_dict.items():
+   875→                    if hparam._importance_dict[recipe][module] is None:
+   876→                        hparam._importance_dict[recipe][module] = _get_auto_quantize_score(
+   877→                            grad_output[0], output_diff
+   878→                        )
+   879→                    else:
+   880→                        _add_auto_quantize_score(
+   881→                            grad_output[0], output_diff, hparam._importance_dict[recipe][module]
+   882→                        )
+   883→
+   884→        def setup_params_for_score_estimation(name, param, params_metadata, enable_grad=True):
+   885→            # Let us delete the gradient as soon as they are computed to save memory
+   886→            params_metadata[name] = {"requires_grad": param.requires_grad}
+   887→            param.requires_grad = enable_grad
+   888→            if not enable_grad:
+   889→                return
+   890→            if self.config.get("verbose", False):
+   891→                print_rank_0(f"AutoQuantize: Enabling gradient for param {name}.")
+   892→            accum_grad, handle = create_param_grad_clear_hook(param)
+   893→            params_metadata[name]["accum_grad"] = accum_grad  # We need to keep the accum_grad alive
+   894→            params_metadata[name]["handle"] = handle
+   895→
+   896→        def setup_module_for_score_estimation(module):
+   897→            module._forward_original = module.forward
+   898→            module.forward = types.MethodType(auto_quantize_score_estimate_forward, module)
+   899→            module._backward_hook_handle = module.register_full_backward_hook(backward_hook)
+   900→
+   901→        def cleanup_module_after_score_estimation(module):
+   902→            module.forward = module._forward_original
+   903→            del module._forward_original
+   904→
+   905→            module._backward_hook_handle.remove()
+   906→
+   907→        def cleanup_params_after_score_estimation(name, param, params_metadata):
+   908→            param.requires_grad = params_metadata[name]["requires_grad"]
+   909→            handle = params_metadata[name].get("handle", None)
+   910→            if handle is not None:
+   911→                handle.remove()
+   912→
+   913→        score_modules = set()
+   914→        for name, module in self.model.named_modules():
+   915→            if (
+   916→                hasattr(module, "_hparams_for_scoring")
+   917→                and any(hparam.is_configurable for hparam in module._hparams_for_scoring)
+   918→                and module not in score_modules
+   919→            ):
+   920→                # Monkey patch the forward methods to cache (Q(Y) - Y)
+   921→                setup_module_for_score_estimation(module)
+   922→                score_modules.add(module)
+   923→
+   924→        params_metadata = {}
+   925→        for name, param in self.model.named_parameters():
+   926→            setup_params_for_score_estimation(
+   927→                name, param, params_metadata, is_param_grad_enabled(name, self.model)
+   928→            )
+   929→
+   930→        gc.collect()
+   931→        if torch.cuda.is_available():
+   932→            torch.cuda.reset_peak_memory_stats()
+   933→            report_memory("AutoQuantize: starting score estimation, ")
+   934→
+   935→        self._run_func(
+   936→            self.config["forward_backward_step"],
+   937→            num_iters=self.config["num_score_steps"],
+   938→            desc="Estimating auto_quantize scores",
+   939→        )
+   940→
+   941→        if torch.cuda.is_available():
+   942→            report_memory("AutoQuantize: After score estimation")
+   943→
+   944→        for module in score_modules:
+   945→            cleanup_module_after_score_estimation(module)
+   946→
+   947→        for name, param in self.model.named_parameters():
+   948→            cleanup_params_after_score_estimation(name, param, params_metadata)
+   949→
+   950→        # Delete the params_metadata
+   951→        del params_metadata
+   952→        gc.collect()
+   953→
+   954→    def estimate_sensitivity_scores(self) -> None:
+   955→        """Estimate sensitivity scores using hessian approximation."""
+   956→        self.model.eval()
+   957→
+   958→        def _default_is_param_grad_enabled(pname, model):
+   959→            return True
+   960→
+   961→        grad_checkpointing_ctxt = None
+   962→        is_param_grad_enabled = _default_is_param_grad_enabled
+   963→        for is_supported_checker, ctxt_candidate, grad_enabled_candidate in self._custom_support:
+   964→            if is_supported_checker(self.model):
+   965→                grad_checkpointing_ctxt = ctxt_candidate
+   966→                is_param_grad_enabled = grad_enabled_candidate
+   967→                break
+   968→
+   969→        with grad_checkpointing_ctxt(self.model) if grad_checkpointing_ctxt else nullcontext():
+   970→            self._estimate_auto_quantize_scores(is_param_grad_enabled)
+   971→
+   972→    def run_search_with_stats(self, max_weight_size, verbose=False):
+   973→        """Linear Programming Solve for gradient based auto_quantize.
+   974→
+   975→        AutoQuantize uses Linear Programming Solver to find the optimal quantization configuration which
+   976→        minimizes the sum of per-layer auto_quantize scores while meeting the specified constraint.
+   977→        """
+   978→        # TODO: Do this only for rank 0 in the respective pipeline group
+   979→
+   980→        for lower_bound in [None, 0.99, 0.90]:
+   981→            # The LP solver for auto_quantize sometimes fails to find a solution if a lower bound is not
+   982→            # specified. I dont know why this happens.
+   983→            # As a workaround, lets specify a lower bound for the weight compression if previous
+   984→            # search without lower bound fails.
+   985→            constraints, constraint_name = self._get_constraints_for_search(
+   986→                max_weight_size, lower_bound
+   987→            )
+   988→
+   989→            lps = LPS(
+   990→                name="AutoQuantize",
+   991→                constraints=constraints,
+   992→                constraints_to_candidate_costs={
+   993→                    constraint_name: [
+   994→                        candidate_stat["costs"] for candidate_stat in self.candidate_stats.values()
+   995→                    ]
+   996→                },
+   997→                candidate_scores=[
+   998→                    candidate_stat["scores"] for candidate_stat in self.candidate_stats.values()
+   999→                ],
+  1000→                objective_type="minimize",
+  1001→                verbose=verbose,
+  1002→            )
+  1003→            selections, self.status = lps()
+  1004→            if self.status == "Optimal":
+  1005→                break
+  1006→
+  1007→        if self.status != "Optimal":
+  1008→            warnings.warn(
+  1009→                "AutoQuantize FAILED to find a solution! The searched model might not meet all constraints. "
+  1010→            )
+  1011→            is_satisfied = False
+  1012→        else:
+  1013→            is_satisfied = True
+  1014→
+  1015→        best_recipes = {}
+  1016→        for name, selected_idx in zip(self.candidate_stats.keys(), selections):
+  1017→            best_recipes[name] = {
+  1018→                "format": self.candidate_stats[name]["formats"][selected_idx],
+  1019→                "costs": self.candidate_stats[name]["costs"][selected_idx],
+  1020→                "scores": self.candidate_stats[name]["scores"][selected_idx],
+  1021→            }
+  1022→
+  1023→        return best_recipes, is_satisfied
+  1024→
+  1025→
+  1026→# TODO: Enable torch compile for this function
+  1027→# Currently modelopt.onnx is breaking this
+  1028→def _get_softmax_dist(
+  1029→    logits: torch.Tensor, tp_group, return_log_prob: bool = False
+  1030→) -> torch.Tensor:
+  1031→    # TODO: test this
+  1032→    dtype = logits.dtype
+  1033→    max_logits = torch.amax(logits, dim=-1, keepdim=True)
+  1034→    torch.distributed.all_reduce(max_logits, op=torch.distributed.ReduceOp.MAX, group=tp_group)
+  1035→    logits = (logits - max_logits).float()
+  1036→    sum_exp_logits = torch.exp(torch.logsumexp(logits, dim=-1, keepdim=True))
+  1037→    torch.distributed.all_reduce(sum_exp_logits, op=torch.distributed.ReduceOp.SUM, group=tp_group)
+  1038→    logits = logits - torch.log(sum_exp_logits)
+  1039→    if return_log_prob:
+  1040→        return logits.to(dtype)
+  1041→    else:
+  1042→        return torch.exp(logits).to(dtype)
+  1043→
+  1044→
+  1045→def _get_softmax(logits: torch.Tensor, return_log_prob: bool = False) -> torch.Tensor:
+  1046→    # TODO: do we need to do log_softmax in float32?
+  1047→    # log_softmax is supposed to be numerically stable implementation
+  1048→    log_prob = torch.log_softmax(logits.float(), dim=-1)
+  1049→    if return_log_prob:
+  1050→        return log_prob
+  1051→    else:
+  1052→        return torch.exp(log_prob)
+  1053→
+  1054→
+  1055→def _get_p_log_q(p: torch.Tensor, log_q: torch.Tensor) -> torch.Tensor:
+  1056→    return torch.sum(p * log_q).float()
+  1057→
+  1058→
+  1059→def _get_prob_from_logits(
+  1060→    logits: torch.Tensor, return_log_prob: bool = False, lm_head: nn.Module = None
+  1061→) -> torch.Tensor:
+  1062→    parallel_state: ParallelState | None = (
+  1063→        getattr(lm_head, "parallel_state", None) if lm_head is not None else None
+  1064→    )
+  1065→    if parallel_state is not None and parallel_state.tensor_parallel_group.is_initialized():
+  1066→        return _get_softmax_dist(
+  1067→            logits, parallel_state.tensor_parallel_group.group, return_log_prob
+  1068→        )
+  1069→    return _get_softmax(logits, return_log_prob)
+  1070→
+  1071→
+  1072→def _get_kl_div_loss(
+  1073→    prob_unquant: torch.Tensor, logits_quant: torch.Tensor, lm_head: nn.Module = None
+  1074→) -> torch.Tensor:
+  1075→    log_prob_quant = _get_prob_from_logits(logits_quant, return_log_prob=True, lm_head=lm_head)
+  1076→    # We dont need to calculate the full kl div loss here, just get - p*log_q
+  1077→    return -_get_p_log_q(prob_unquant, log_prob_quant)
+  1078→
+  1079→
+  1080→def _get_lm_head(model: nn.Module) -> nn.Module:
+  1081→    # HF models do allgather of logits to at lm_head
+  1082→    # Hence lm_head outputs are not TP sharded - so we dont need to return the lm_head for TP KLDiv
+  1083→    # Loss
+  1084→    for name, module in model.named_modules():
+  1085→        if name.endswith("output_layer"):  # Megatron models
+  1086→            return module
+  1087→    return None
+  1088→
+  1089→
+  1090→class AutoQuantizeKLDivSearcher(_AutoQuantizeBaseSearcher):
+  1091→    """A searcher for AutoQuantize algorithm that uses KL-Divergence loss based score estimation."""
+  1092→
+  1093→    @property
+  1094→    def default_search_config(self):
+  1095→        """Get the default config for the searcher."""
+  1096→        config = super().default_search_config
+  1097→        config.update(
+  1098→            {
+  1099→                "forward_step": None,
+  1100→            }
+  1101→        )
+  1102→        return config
+  1103→
+  1104→    def sanitize_search_config(self, config: SearchConfig | None) -> SearchConfig:
+  1105→        """Sanitize the search config dict."""
+  1106→        config = config or {}
+  1107→        for ignored_key in ["score_func", "loss_func", "forward_backward_step"]:
+  1108→            if ignored_key in config:
+  1109→                if config[ignored_key] is not None:
+  1110→                    warnings.warn(
+  1111→                        f"`{ignored_key}` is ignored for KL-Divergence loss based `auto_quantize`."
+  1112→                    )
+  1113→                config.pop(ignored_key)
+  1114→        config = super().sanitize_search_config(config)
+  1115→        assert config["forward_step"] is not None, (
+  1116→            "`forward_step` must be provided for KL-Divergence loss based `auto_quantize`. "
+  1117→            "`forward_step(model, data)` should return model logits."
+  1118→        )
+  1119→        return config
+  1120→
+  1121→    @torch.inference_mode()
+  1122→    def estimate_sensitivity_scores(self):
+  1123→        """Estimate the sensitivity scores for the model.
+  1124→
+  1125→        Higher score means more sensitive to quantization.
+  1126→        """
+  1127→
+  1128→        def set_to_unquantized():
+  1129→            for name, hparam in named_hparams(self.model, unique=True):
+  1130→                if not isinstance(hparam, QuantRecipeHparam):
+  1131→                    continue
+  1132→                if hparam.is_configurable:
+  1133→                    hparam.active = QuantRecipe(quant_cfg=None)
+  1134→
+  1135→        self.model.eval()
+  1136→        num_iters = self.config["num_score_steps"]
+  1137→        for _, data in tqdm(
+  1138→            zip(range(num_iters), self.config["data_loader"]),
+  1139→            desc="Estimating KLDivergence loss",
+  1140→            total=num_iters,
+  1141→        ):
+  1142→            set_to_unquantized()
+  1143→            logits_unquant = self.config["forward_step"](self.model, data)
+  1144→            prob_unquant = _get_prob_from_logits(
+  1145→                logits_unquant,
+  1146→                return_log_prob=False,
+  1147→                lm_head=_get_lm_head(self.model),
+  1148→            )
+  1149→
+  1150→            for name, hparam in tqdm(
+  1151→                list(named_hparams(self.model, configurable=True)), desc="Evaluating hparams"
+  1152→            ):
+  1153→                if not isinstance(hparam, QuantRecipeHparam):
+  1154→                    continue
+  1155→                for recipe in hparam.choices:
+  1156→                    if recipe == QuantRecipe(quant_cfg=None):
+  1157→                        continue
+  1158→                    hparam.active = recipe
+  1159→                    logits_quant = self.config["forward_step"](self.model, data)
+  1160→                    score = _get_kl_div_loss(prob_unquant, logits_quant, _get_lm_head(self.model))
+  1161→                    if hparam._importance_dict[recipe][hparam.score_modules[0]] is None:
+  1162→                        hparam._importance_dict[recipe][hparam.score_modules[0]] = score
+  1163→                    else:
+  1164→                        hparam._importance_dict[recipe][hparam.score_modules[0]] += score
+  1165→                hparam.active = QuantRecipe(quant_cfg=None)
+  1166→
+  1167→    def run_search_with_stats(self, max_weight_size, verbose=False):
+  1168→        """Run threshold-based binary search for KLDivergence loss based auto_quantize.
+  1169→
+  1170→        We use binary search to minimize the max(per-layer score) while meeting the constraint.
+  1171→        """
+  1172→        # Collect all sensitivity scores to determine initial threshold bounds
+  1173→        all_scores = [
+  1174→            score for name in self.candidate_stats for score in self.candidate_stats[name]["scores"]
+  1175→        ]
+  1176→
+  1177→        if not all_scores:
+  1178→            warnings.warn("No scores available for threshold-based search!")
+  1179→            is_satisfied = False
+  1180→            return {}, is_satisfied
+  1181→
+  1182→        # Initialize binary search bounds
+  1183→        min_score = min(all_scores)
+  1184→        max_score = max(all_scores)
+  1185→        threshold = (min_score + max_score) / 2.0
+  1186→        lower_bound = min_score
+  1187→        upper_bound = max_score
+  1188→
+  1189→        # Run for fixed number of iterations
+  1190→        max_iterations = 100
+  1191→
+  1192→        if verbose:
+  1193→            print_rank_0("AutoQuantize: Starting threshold-based binary search")
+  1194→            print_rank_0(f"  Score range: [{min_score:.6e}, {max_score:.6e}]")
+  1195→            print_rank_0(f"  Target weight size: {max_weight_size:.2f}")
+  1196→
+  1197→        for iteration in range(max_iterations):
+  1198→            # Select recipes based on current threshold
+  1199→            best_recipes = {}
+  1200→            total_weight_size = 0.0
+  1201→
+  1202→            for name in self.candidate_stats:
+  1203→                formats = self.candidate_stats[name]["formats"]
+  1204→                scores = self.candidate_stats[name]["scores"]
+  1205→                costs = self.candidate_stats[name]["costs"]
+  1206→
+  1207→                selected_idx = 0
+  1208→                for idx in range(len(formats)):
+  1209→                    if scores[idx] <= threshold:
+  1210→                        selected_idx = idx
+  1211→                        break
+  1212→
+  1213→                best_recipes[name] = {
+  1214→                    "format": formats[selected_idx],
+  1215→                    "costs": costs[selected_idx],
+  1216→                    "scores": scores[selected_idx],
+  1217→                }
+  1218→                total_weight_size += costs[selected_idx]
+  1219→
+  1220→            # Check if we meet the constraint
+  1221→            meets_constraint = total_weight_size <= max_weight_size
+  1222→
+  1223→            if verbose:
+  1224→                print_rank_0(
+  1225→                    f"  Iteration {iteration + 1}: threshold={threshold:.6e}, "
+  1226→                    f"weight_size={total_weight_size:.2f}, "
+  1227→                    f"meets_constraint={meets_constraint}"
+  1228→                )
+  1229→
+  1230→            # Update binary search bounds
+  1231→            if meets_constraint:
+  1232→                upper_bound = threshold  # Threshold was too aggressive, relax it
+  1233→            else:
+  1234→                lower_bound = threshold  # Threshold was too lax, tighten it
+  1235→
+  1236→            # Update threshold for next iteration
+  1237→            threshold = (lower_bound + upper_bound) / 2.0
+  1238→
+  1239→        # Final check if constraint is satisfied
+  1240→        is_satisfied = total_weight_size <= max_weight_size
+  1241→
+  1242→        if verbose:
+  1243→            print_rank_0(
+  1244→                f"AutoQuantize: Search complete. "
+  1245→                f"Final weight size: {total_weight_size:.2f} "
+  1246→                f"(target: {max_weight_size:.2f}), "
+  1247→                f"constraint satisfied: {is_satisfied}"
+  1248→            )
+  1249→
+  1250→        return best_recipes, is_satisfied
+  1251→
+  1252→
+  1253→# Backward compatibility alias (defaults to gradient-based searcher)
+  1254→AutoQuantizeSearcher = AutoQuantizeGradientSearcher
+  1255→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

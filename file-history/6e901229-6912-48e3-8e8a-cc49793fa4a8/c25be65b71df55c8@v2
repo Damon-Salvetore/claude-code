@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# test_serial_3.sh — 用 max_updates=5 串行跑 3 个模式，验证衔接
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export MAX_UPDATES=5
+
+MODES=("baseline" "nvfp4" "nvfp4_full")
+PASS=0
+FAIL=0
+
+echo "============================================="
+echo "  Serial handoff test: 3 modes × max_updates=5"
+echo "  Start: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "============================================="
+
+for i in "${!MODES[@]}"; do
+    mode="${MODES[$i]}"
+    n=$((i + 1))
+    echo ""
+    echo "[$n/3] Base-0.4B ${mode}"
+    echo "Start: $(date '+%Y-%m-%d %H:%M:%S')"
+
+    bash "${SCRIPT_DIR}/run_single.sh" Base-0.4B "$mode" && rc=0 || rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        echo "Result: SUCCESS (exit code 0)"
+        PASS=$((PASS + 1))
+    else
+        echo "Result: FAILED (exit code $rc)"
+        FAIL=$((FAIL + 1))
+    fi
+    echo "End: $(date '+%Y-%m-%d %H:%M:%S')"
+
+    # 验证 GPU 已释放
+    gpu_pids=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | wc -l)
+    echo "GPU processes after cleanup: ${gpu_pids}"
+    if [[ $gpu_pids -gt 0 ]]; then
+        echo "WARNING: GPU not fully released, force killing..."
+        nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+        sleep 5
+    fi
+done
+
+echo ""
+echo "============================================="
+echo "  Test results: PASS=$PASS, FAIL=$FAIL"
+if [[ $FAIL -eq 0 ]]; then
+    echo "  ✓ ALL PASSED — serial handoff works!"
+else
+    echo "  ✗ $FAIL FAILED — check logs"
+fi
+echo "  End: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "============================================="
