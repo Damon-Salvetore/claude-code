@@ -1,0 +1,263 @@
+# CLAUDE.md — llm-train 项目笔记
+
+## 项目结构
+
+- `llm/nnscaler_train.py` — 训练入口，基于 nnscaler 框架
+- `llm/config.py` — 模型/数据/训练超参注册（`model_args`, `data_args`, `training_args`）
+- `llm/arch/` — 模型架构（model.py, ffn.py, attention.py, config.py 等）
+- `llm/kernel/` — 自定义 kernel（nvfp4_quant.py, quant.py 等）
+- `scripts/` — 运维脚本
+- `scripts/nvfp4_experiment/` — NVFP4 W4A4 量化实验的启动/监控/收集脚本
+
+## 关键 CLI 参数（nnscaler_train.py）
+
+- `--model` / `--data` / `--hyperparams` 三件套从 config.py 的字典里选
+- `--plan_ngpus` 是计划单元大小，`--runtime_ngpus` 是实际 GPU 数，`--zero_group_size` 是 ZeRO 分组
+- `--no_save` 禁止存 checkpoint
+- `--nvfp4_mode 0/1/2` 控制 NVFP4 W4A4 伪量化：0=关闭，1=仅 FFN 层，2=FFN+QKVO 全量化
+- `--name` 设置 wandb run name
+- `--save_path` 指定 wandb 日志目录（不是 checkpoint 目录）
+- `--precision fp32` 实际上是 nnscaler 内部自动 cast 到 bf16 的混合精度
+
+## 核心原则
+
+**不出错比做完更重要。慢一点没关系，重点是写一定正确的代码、做一定正确的操作。不要急着完成任务。**
+
+1. **每一个改动都要验证，没验证的不上生产。** 改了步数、改了 wandb project、加了子 agent——每一个都是改动，每一个都可能出错。改一处，验一处，确认没问题再进行下一步。
+2. **测试通过的东西原样使用。** 测试成功用的是哪个脚本、哪些参数、什么环境，正式跑就用一模一样的，只改必须改的（如步数）。不要换一个"更好的"没测过的脚本。
+3. **出了问题先定位根因，不要急着修。** 反复杀子进程不如花一分钟 `ps -p <pid> -o ppid` 追到根进程。盲目重试只会浪费更多时间。
+4. **引入的每个新东西都是风险。** 子 agent、新脚本、环境变量覆盖——能不加就不加。如果要加，先在测试环境验证不会跟现有流程冲突。
+5. **环境干净和逻辑正确同等重要。** 脚本逻辑对了不够，还要确认没有残留进程、旧日志、旧缓存。很多"莫名其妙的 bug"都是脏环境导致的。
+
+## 踩过的坑 & 经验总结
+
+### 1. `tee` 覆盖日志问题
+**问题**：`run_single.sh` 最初用 `tee "$LOG_FILE"` 会覆盖之前的日志。当 `run_all_sequential.sh` 重跑已完成的实验时，之前的日志被清空。
+**修复**：改为 `tee -a "$LOG_FILE"`（追加模式）。
+**教训**：涉及批量串行跑实验的脚本，日志一律用追加模式，或者每次运行带时间戳命名日志文件。
+
+### 2. nnscaler 编译缓存 `.nnscaler/`
+**现象**：每次换模型架构必须 `rm -rf .nnscaler/`，否则会复用旧的计算图计划导致出错。
+**注意**：`run_single.sh` 里已加 `rm -rf .nnscaler/`，但这意味着同架构的 baseline 和 nvfp4 也会重新编译（~1-2分钟），可以接受。
+
+### 3. nnscaler 进度条的 step 含义
+**迷惑点**：进度条显示 `XXX/50000000`，这个 50000000 是 epoch 内的 micro batch 总数（数据集很大），不是 max_updates。
+**实际 step 计算**：`update_freq=2` 时，进度条数字 / 2 = 实际 training update step。所以进度条到 20000 时 = 10000 training updates = 实验结束。
+**速度估算**：~6 it/s（micro batch），即 ~3 training updates/s，10000 updates ≈ 55 分钟/实验。
+
+### 4. wandb run ID 不会冲突
+每次启动训练会生成唯一的 wandb run ID（包含时间戳），所以即使重跑同名实验，wandb 上会出现多个 run，数据不会丢失或覆盖。可以在 wandb 面板上按时间区分。
+
+### 5. `exec` 导致串行脚本卡死（严重）
+**问题**：`run_single.sh` 里用了 `exec torchrun ... | tee ...`，`exec` 会替换当前 shell 进程为 torchrun。当 `run_all_sequential.sh` 调用 `bash run_single.sh` 时，子 shell 被 exec 替换，训练结束后父进程检测不到子进程退出，导致整个串行链条卡死——跑完第一个实验后不会继续跑第二个。
+**修复**：去掉 `exec`，直接 `torchrun ... | tee -a ...`。
+**教训**：在会被其他脚本调用的子脚本里，**永远不要用 `exec`**，除非你确定它是最终入口。
+
+### 6. GPU 显存约束参数
+`--gpu_mem_constraint 135` 是告诉 nnscaler autodist 每张卡可用 135GB 显存来生成分布式计划。B200 有 180GB，留了 45GB 余量给系统/框架。实际训练时模型只用了 ~15GB（0.4B 模型很小），这个约束主要影响 autodist 的切分策略。
+
+### 7. 4 个 NVFP4 实验模型都是非 YOCO 架构
+config.py 里 `Base-0.4B`, `GatedAttn-0.4B`, `DiffAttn-0.4B`, `GatedDiffAttn-0.4B` 都设置了 `yoco_cross_layers=0, universal_loop=1`，是普通 Transformer，不是 YOCO 架构。这是为了隔离变量，只测量 NVFP4 量化的影响。
+
+### 8. torchrun + tee 管道导致串行脚本卡死（严重，第二次踩坑）
+**问题**：去掉 `exec` 后改用 `torchrun ... | tee -a`，但 torchrun 结束后 nnscaler fork 的 worker 子进程有时不退出（持有 GPU 设备描述符和 pipe），导致 pipe 不关闭 → tee 永远阻塞 → `run_single.sh` 不返回 → 串行链条再次卡死。
+**修复**：彻底放弃管道模式。改为：
+1. `torchrun ... >> "$LOG_FILE" 2>&1 &`（后台运行，直接写文件）
+2. `tail -f "$LOG_FILE" &`（单独进程实时输出到 stdout）
+3. `wait $TORCHRUN_PID`（等主进程退出）
+4. 训练完成后主动 `pgrep + kill` 清理残留 nnscaler worker 进程
+**教训**：torchrun 的子进程生命周期不可控时，**不要用管道连接训练进程**。用重定向写文件 + 独立 tail 进程实时显示是更可靠的方案。
+
+### 9. `set -e` 下子脚本非零退出会终止父脚本
+**问题**：`run_all_sequential.sh` 里 `set -euo pipefail`，当 `bash run_single.sh` 返回非零（比如被 kill 的残留进程），整个 runner 立即退出，不会继续跑下一个实验。
+**修复**：改为 `bash run_single.sh ... && exit_code=0 || exit_code=$?`，捕获退出码但不触发 `set -e`。
+**教训**：批量运行脚本里，对子任务的调用要做容错处理，不能让单个失败中断整个流程。
+
+### 10. 修改磁盘代码不影响正在运行的 Python 训练
+Python 进程启动时就把所有 `.py` 文件加载到内存，之后训练过程中不会再从磁盘读取源码。所以可以安全修改代码文件（如新增 `nvfp4_mode=2`），不会影响当前正在运行的实验（使用 `nvfp4_mode=0/1`）。
+
+### 11. `wait $PID` 对 torchrun 无效（第三次卡死）
+**问题**：改用 `torchrun ... >> log &` + `wait $TORCHRUN_PID` 方案后，发现 torchrun 自身也会 `wait` 它的子进程（nnscaler worker）。如果子进程不退出，torchrun 也不退出，`wait` 永远阻塞。
+**最终方案**：放弃 `wait`，改用**日志轮询**检测训练完成：
+1. `torchrun ... > "$LOG_FILE" 2>&1 &`
+2. 每 10 秒 `grep -q "Synced.*W&B file" "$LOG_FILE"` 检测 wandb 同步完成
+3. 同时 `kill -0 $TORCHRUN_PID` 检测异常退出
+4. 超时保护（2 小时）
+5. 检测到完成后，主动 `pgrep + kill` 杀掉整棵进程树
+**教训**：对于子进程生命周期不可控的场景，轮询外部标记比 `wait` 更可靠。
+
+### 12. 旧日志内容导致新实验被误杀
+**问题**：`run_single.sh` 用 `>>` 追加日志，旧日志残留了前次失败实验的 `SignalException` 等内容。新实验启动后，`pgrep` 按 run name 匹配的 cleanup 可能误杀新进程（因为旧进程的名字模式相同）。同时 `tail -f` 把旧内容输出到父脚本日志，造成混乱。
+**修复**：
+- 启动前 `> "$LOG_FILE"` 清空旧日志
+- 启动前 pre-cleanup：`pgrep -f "nnscaler_train.py.*--name ${RUN_NAME}" | xargs -r kill -9` 杀残留进程
+- 用 `>` 而不是 `>>` 写日志
+**教训**：串行跑实验时，每次启动必须保证日志干净、进程环境干净。
+
+### 13. 串行衔接验证方法
+**方法**：用 `max_updates=5` 跑两个极短实验串行，验证 `run_single.sh` 能正确检测完成→清理→退出→衔接下一个。整个验证约 4 分钟。
+**结论**：日志轮询 + 主动 kill 方案在实测中成功衔接。
+**教训**：在投入长时间批量实验之前，先用极短训练做 end-to-end 验证，不要只检查语法和逻辑。
+
+### 14. `pgrep -f` 模式的子串匹配陷阱
+**潜在问题**：`pgrep -f "nnscaler_train.py.*--name Base-0.4B-nvfp4"` 也会匹配到 `Base-0.4B-nvfp4_full`（因为是子串）。当前靠串行执行（不会同时有两个实验运行）来规避。如果将来改为并行，需要加 `\b` 或精确匹配。
+
+### 15. 系统 RAM 和 GPU 显存余量充裕
+本机 ~3TB 系统内存 + 4×192GB B200 GPU。0.4B 模型训练：
+- 系统 RAM：进程 RSS < 8GB，总使用率 ~6%
+- GPU 显存：每卡 ~15-19GB（仅用 ~10%）
+- `train/ram_gb_used`（wandb 指标）~160-200GB 是包含了 PyTorch 缓存和共享内存，**不是进程真实 RSS**
+- 完全不存在 OOM 风险
+
+### 16. wandb 指标 `train/ram_gb_used` 的含义
+wandb 上看到的 `train/ram_gb_used` 并非进程实际 RSS，而是训练代码主动记录的系统级 RAM 指标（可能包含 OS cache、共享内存、PyTorch memory pool 等）。两次相同条件跑出来曲线不同是正常的，受系统缓存状态、`torch.compile` 缓存、其他后台进程等影响。真正的进程内存看 `system.proc.memory.rssMB`（~3-8GB）。
+
+### 17. nnscaler `instance_name` 里的点号导致路径错误（严重）
+**问题**：`nnscaler_train.py` 第 976 行 `instance_name=args.name`，nnscaler 用这个名字构建 `.nnscaler/_parallel_modules/` 下的目录路径。名字里的 `.`（如 `Base-0.4B-baseline`）会被解析为路径分隔符，生成 `Base-0/4B-baseline`，导致 `FileNotFoundError`。
+**修复**：在 `run_single.sh` 里用 `SAFE_NAME="${RUN_NAME//./_}"` 把点号替换为下划线，传给 `--name`。
+**注意**：`RUN_NAME`（带点号）仍用于日志文件名和 `save_path`（这些不经过 nnscaler 路径解析）。`SAFE_NAME`（下划线）用于 `--name`（nnscaler instance_name）和 `pgrep` 匹配。
+
+### 18. nnscaler 编译缓存与 wandb 残留 run 冲突
+**问题**：`rm -rf .nnscaler/` 删除编译缓存后重新编译，但如果 wandb 上有同名的旧 run 残留，可能导致 nnscaler code generation 时目录创建竞态。
+**修复**：跑全新一轮实验前，在 wandb 面板上删除所有旧 run，确保干净环境。
+**教训**：长期串行实验前，先清理 wandb 旧 run + 本地 `.nnscaler/` 缓存 + 旧日志文件，三管齐下。
+
+### 19. `run_single.sh` 的 `MAX_UPDATES` 环境变量
+`run_single.sh` 支持 `MAX_UPDATES` 环境变量覆盖默认的 10000 步：
+- 默认：`MAX_UPDATES=10000`（正式实验）
+- 测试：`MAX_UPDATES=5 bash run_single.sh Base-0.4B baseline`（~2分钟快速验证）
+用于在正式跑之前做串行衔接的 end-to-end 验证。
+
+### 20. GPU 进程清理不彻底的处理
+**问题**：`kill -9` 杀死 Python 进程后，GPU 显存可能不会立即释放（进程变成僵尸但 nvidia-smi 仍显示占用）。
+**处理**：杀进程后 `sleep 5` 等待 GPU 驱动回收，然后用 `nvidia-smi --query-compute-apps=pid --format=csv,noheader` 检查。如果仍有残留，再次 `kill -9`。连续两次后一般能释放。
+**教训**：每次启动新实验前，不仅要检查 `pgrep`，还要检查 `nvidia-smi` 确认 GPU 真正空闲。
+
+### 21. nnscaler codegen 目录预创建（严重）
+**问题**：nnscaler 的 `_prepare_namespace` 函数调用 `outdir.mkdir(parents=True)` 创建目录，但后续 `frame.py` 的 `save_attr_content` 调用 `torch.save()` 时，`torch._C.PyTorchFileWriter` 报 `RuntimeError: Parent directory ... does not exist`。baseline (mode=0) 和 nvfp4_full (mode=2) 会失败，但 nvfp4 (mode=1) 能成功（原因不明，可能是竞态或缓存差异）。
+**修复**：在 `run_single.sh` 里 `rm -rf .nnscaler/` 之后、启动 torchrun 之前，手动预创建目录：
+```bash
+mkdir -p ".nnscaler/_parallel_modules/__main__/BackBone/${SAFE_NAME}"
+```
+**教训**：不要指望框架内部的目录创建一定可靠，关键路径上加一行 `mkdir -p` 预创建是最保守的保障。
+
+### 22. nohup 后台脚本必须从根进程杀（严重）
+**问题**：`nohup bash test_all_12.sh > logs/run_all_12.log 2>&1 &` 启动的串行实验脚本，如果只杀子进程（torchrun、nnscaler worker），nohup 的根 shell 进程还活着，会不断拉起下一个实验。表现为：杀掉 GPU 进程后，几秒钟内又有新进程出现在 GPU 上，无限循环。
+**正确停止方法**：
+1. 先找根进程：`ps aux | grep test_all_12` 或 `pgrep -f test_all_12`
+2. 杀根进程：`kill -9 <nohup根PID>`
+3. 再杀子进程：`pkill -9 -f nnscaler_train.py; pkill -9 -f torchrun`
+4. 等待 GPU 释放：`sleep 5; nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9`
+**教训**：停止 nohup 后台脚本时，**必须先杀 nohup 根进程**，否则杀子进程是无用功。
+
+### 23. 子 agent 也是改动，也需要验证
+**问题**：Claude 子 agent（后台监控 agent）的 `pgrep`/`kill` 操作误杀了正在运行的训练进程。agent 的命令行参数被 `pgrep -f` 子串匹配到，触发了 pre-cleanup 误杀。
+**根因**：子 agent 是一个未经验证的新东西，直接在正式实验旁边启动了，没有先测试它和训练进程是否冲突。
+**教训**：子 agent 可以用，但它也是一个改动，也需要验证。正确做法是先用短实验（`MAX_UPDATES=5`）+ 子 agent 一起跑，确认不冲突，再用于正式实验。
+
+### 24. 脚本内 `export` 覆盖外部环境变量
+**问题**：`test_all_12.sh` 里写了 `export MAX_UPDATES=5`，这会无条件覆盖外部传入的值。用 `MAX_UPDATES=5000 bash test_all_12.sh` 传环境变量无效，仍然只跑 5 步。
+**根因**：写了错误的代码。`export VAR=值` 是无条件赋值，要支持外部覆盖应该写 `export VAR=${VAR:-默认值}`。这不是"该不该用环境变量"的问题，而是代码写错了。
+**修复**：用 `export MAX_UPDATES=${MAX_UPDATES:-5}` 支持外部覆盖，或者正式跑时直接改脚本里的值。
+**教训**：写代码时要确保逻辑一定正确，而不是急着把任务跑起来。一行错误的 `export` 导致 12 个实验全部白跑。
+
+### 25. 新实验批次用新 wandb project
+**做法**：每次全新一轮实验用一个新的 wandb project name（如 `nvfp4_experiment` → `nvfp4new`），避免旧 run 残留干扰。
+**修改位置**：`run_single.sh` 的 `--wandb_project` 参数。
+
+### 26. 完整清理环境的 checklist
+每次重新开始实验前，按顺序执行：
+1. **杀 nohup 根进程**：`pgrep -f "test_all_12\|run_all_12" | xargs -r kill -9`
+2. **杀训练进程**：`pkill -9 -f nnscaler_train.py; pkill -9 -f torchrun; pkill -9 -f "tail -f"`
+3. **等待 + 清 GPU**：`sleep 5; nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9`
+4. **再等 + 确认 GPU 干净**：`sleep 5; nvidia-smi --query-compute-apps=pid --format=csv,noheader`（应该无输出）
+5. **清日志**：`rm -f logs/*.log`
+6. **清 nnscaler 缓存**：`rm -rf llm/.nnscaler/`
+7. **清 wandb 本地缓存**：`rm -rf llm/wandb/ /tmp/nvfp4_runs/`
+
+## 常用命令
+
+```bash
+# 跑单个实验
+bash scripts/nvfp4_experiment/run_single.sh Base-0.4B baseline
+bash scripts/nvfp4_experiment/run_single.sh Base-0.4B nvfp4       # mode=1, FFN only
+bash scripts/nvfp4_experiment/run_single.sh Base-0.4B nvfp4_full  # mode=2, FFN+QKVO
+
+# 串行跑全部 12 个实验（4 模型 × 3 模式，每个 5000 步）
+nohup bash scripts/nvfp4_experiment/test_all_12.sh > logs/run_all_12.log 2>&1 &
+
+# 实时监控
+tail -f logs/run_all_12.log
+
+# 查看训练进度（进度条数字 ÷ 2 = training step）
+grep -oP '\d+/50000000' logs/Base-0.4B-nvfp4.log | tail -1
+
+# 查看各实验完成状态
+for f in logs/*.log; do echo "$(basename $f .log): $(grep -c 'Synced.*W&B file' $f) synced"; done
+
+# 收集结果（wandb API）
+python scripts/nvfp4_experiment/collect_results.py
+
+# 完整停止实验（必须先杀根进程！）
+pgrep -f "test_all_12\|run_all_12" | xargs -r kill -9
+pkill -9 -f nnscaler_train.py; pkill -9 -f torchrun; pkill -9 -f "tail -f"
+sleep 5; nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9
+# 等 5 秒后确认：nvidia-smi --query-compute-apps=pid --format=csv,noheader 应该无输出
+```
+
+## wandb 信息
+
+- Entity: `3259482542-south-china-university-of-technology`
+- Project: `nvfp4new`（当前批次）
+- 面板: https://wandb.ai/3259482542-south-china-university-of-technology/nvfp4new
+
+## 训练启动前验证 checklist
+
+MANDATORY：每次启动训练（无论测试还是正式）前，按顺序检查：
+
+```bash
+# 1. GPU 干净（应该无输出）
+nvidia-smi --query-compute-apps=pid --format=csv,noheader
+
+# 2. 无残留训练进程
+pgrep -f nnscaler_train.py
+pgrep -f torchrun
+
+# 3. nnscaler 缓存已清理
+ls llm/.nnscaler/ 2>/dev/null && echo "WARNING: .nnscaler/ exists"
+
+# 4. 日志文件已清理（避免旧日志误触发完成检测）
+ls logs/*.log 2>/dev/null
+
+# 5. 脚本参数确认（最关键！逐条检查和需求是否一致）
+grep 'MAX_UPDATES' scripts/nvfp4_experiment/test_all_12.sh
+grep 'wandb_project' scripts/nvfp4_experiment/run_single.sh
+```
+
+如果任何一项不通过，先解决再启动。不要 "应该没问题" 就跑。
+
+## 会话状态文件
+
+长时间实验期间或 compact 前，把当前状态写到 `.claude/sessions/YYYY-MM-DD-<topic>.tmp`：
+- 什么在跑、跑到哪了
+- 哪些方案试过了、成功/失败
+- 下一步要做什么
+- 需要加载哪些文件的上下文
+
+下次会话开始时提供该文件路径即可续接。
+
+## 工作模式
+
+根据当前任务切换行为模式：
+
+| 模式 | 行为 | 适用场景 |
+|------|------|----------|
+| **研究模式** | 先读后写、多探索、记录发现、不急着改代码 | 排查 bug、理解框架源码、设计新功能 |
+| **开发模式** | 写代码优先、改完立测、保持 commit 原子性 | 实现功能、修 bug、写脚本 |
+| **运维模式** | 保守操作、每步确认、先验证再执行 | 启动训练、清理环境、处理 GPU |
+
+NEVER 在运维模式中尝试"顺便"改代码。
+
+## 预批准命令（.claude/settings.json）
+
+当前配置为 `Bash(*)` 全部自动批准。如需收紧，编辑 `.claude/settings.json` 的 `permissions.allow` 列表。

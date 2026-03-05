@@ -4309,3 +4309,21 @@
 2026-03-04T19:34:03.488Z [DEBUG] Replacing all ask rules for destination 'localSettings' with 0 rule(s): []
 2026-03-04T19:34:03.488Z [DEBUG] Replacing all allow rules for destination 'userSettings' with 37 rule(s): ["WebFetch","WebSearch","Read","Glob","Grep","Bash(ls *)","Bash(cat *)","Bash(head *)","Bash(tail *)","Bash(wc *)","Bash(find *)","Bash(grep *)","Bash(echo *)","Bash(date *)","Bash(pwd *)","Bash(which *)","Bash(ps *)","Bash(du *)","Bash(df *)","Bash(free *)","Bash(nvidia-smi*)","Bash(git status*)","Bash(git diff*)","Bash(git log*)","Bash(git branch*)","Bash(git show*)","Bash(python3 -c *)","Bash(python3 -m py_compile *)","Bash(python -c *)","Bash(pip list*)","Bash(pip3 list*)","Bash(pip show *)","Bash(pip3 show *)","Bash(bash -n *)","Bash(mkdir *)","Bash(touch *)","Bash(sleep *)"]
 2026-03-04T19:34:03.488Z [DEBUG] Replacing all allow rules for destination 'projectSettings' with 46 rule(s): ["Bash","Bash(pgrep *)","Bash(kill *)","Bash(xargs *)","Bash(sleep *)","Bash(nvidia-smi*)","Bash(rm *)","Bash(tail *)","Bash(head *)","Bash(wc *)","Bash(cat *)","Bash(ls *)","Bash(ps *)","Bash(mkdir *)","Bash(chmod *)","Bash(find *)","Bash(grep *)","Bash(echo *)","Bash(date *)","Bash(pkill *)","Bash(sed *)","Bash(cd *)","Bash(torchrun *)","Bash(nohup *)","Bash(export *)","Bash(source *)","Bash(cp *)","Bash(mv *)","Bash(touch *)","Bash(which *)","Bash(python *)","Bash(python3 *)","Bash(pip *)","Bash(pip3 *)","Bash(du *)","Bash(df *)","Bash(free *)","Bash(bash *)","Bash(test *)","Bash(for *)","Bash(while *)","Bash(if *)","Edit","Write","NotebookEdit","Agent"]
+2026-03-04T19:45:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-04T20:15:58.069Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-04T20:45:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-04T21:15:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-04T21:45:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-04T22:15:58.069Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-04T22:45:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-04T23:15:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-04T23:45:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-05T00:15:58.069Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-05T00:45:58.069Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-05T01:15:58.069Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-05T01:45:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-05T02:15:58.069Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-05T02:45:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-05T03:15:58.069Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-05T03:45:58.069Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-05T04:15:58.070Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
