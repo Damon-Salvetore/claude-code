@@ -1,0 +1,232 @@
+     1→---
+     2→name: eval-harness
+     3→description: Formal evaluation framework for Claude Code sessions implementing eval-driven development (EDD) principles
+     4→tools: Read, Write, Edit, Bash, Grep, Glob
+     5→---
+     6→
+     7→# Eval Harness Skill
+     8→
+     9→A formal evaluation framework for Claude Code sessions, implementing eval-driven development (EDD) principles.
+    10→
+    11→## Philosophy
+    12→
+    13→Eval-Driven Development treats evals as the "unit tests of AI development":
+    14→- Define expected behavior BEFORE implementation
+    15→- Run evals continuously during development
+    16→- Track regressions with each change
+    17→- Use pass@k metrics for reliability measurement
+    18→
+    19→## Eval Types
+    20→
+    21→### Capability Evals
+    22→Test if Claude can do something it couldn't before:
+    23→```markdown
+    24→[CAPABILITY EVAL: feature-name]
+    25→Task: Description of what Claude should accomplish
+    26→Success Criteria:
+    27→  - [ ] Criterion 1
+    28→  - [ ] Criterion 2
+    29→  - [ ] Criterion 3
+    30→Expected Output: Description of expected result
+    31→```
+    32→
+    33→### Regression Evals
+    34→Ensure changes don't break existing functionality:
+    35→```markdown
+    36→[REGRESSION EVAL: feature-name]
+    37→Baseline: SHA or checkpoint name
+    38→Tests:
+    39→  - existing-test-1: PASS/FAIL
+    40→  - existing-test-2: PASS/FAIL
+    41→  - existing-test-3: PASS/FAIL
+    42→Result: X/Y passed (previously Y/Y)
+    43→```
+    44→
+    45→## Grader Types
+    46→
+    47→### 1. Code-Based Grader
+    48→Deterministic checks using code:
+    49→```bash
+    50→# Check if file contains expected pattern
+    51→grep -q "export function handleAuth" src/auth.ts && echo "PASS" || echo "FAIL"
+    52→
+    53→# Check if tests pass
+    54→npm test -- --testPathPattern="auth" && echo "PASS" || echo "FAIL"
+    55→
+    56→# Check if build succeeds
+    57→npm run build && echo "PASS" || echo "FAIL"
+    58→```
+    59→
+    60→### 2. Model-Based Grader
+    61→Use Claude to evaluate open-ended outputs:
+    62→```markdown
+    63→[MODEL GRADER PROMPT]
+    64→Evaluate the following code change:
+    65→1. Does it solve the stated problem?
+    66→2. Is it well-structured?
+    67→3. Are edge cases handled?
+    68→4. Is error handling appropriate?
+    69→
+    70→Score: 1-5 (1=poor, 5=excellent)
+    71→Reasoning: [explanation]
+    72→```
+    73→
+    74→### 3. Human Grader
+    75→Flag for manual review:
+    76→```markdown
+    77→[HUMAN REVIEW REQUIRED]
+    78→Change: Description of what changed
+    79→Reason: Why human review is needed
+    80→Risk Level: LOW/MEDIUM/HIGH
+    81→```
+    82→
+    83→## Metrics
+    84→
+    85→### pass@k
+    86→"At least one success in k attempts"
+    87→- pass@1: First attempt success rate
+    88→- pass@3: Success within 3 attempts
+    89→- Typical target: pass@3 > 90%
+    90→
+    91→### pass^k
+    92→"All k trials succeed"
+    93→- Higher bar for reliability
+    94→- pass^3: 3 consecutive successes
+    95→- Use for critical paths
+    96→
+    97→## Eval Workflow
+    98→
+    99→### 1. Define (Before Coding)
+   100→```markdown
+   101→## EVAL DEFINITION: feature-xyz
+   102→
+   103→### Capability Evals
+   104→1. Can create new user account
+   105→2. Can validate email format
+   106→3. Can hash password securely
+   107→
+   108→### Regression Evals
+   109→1. Existing login still works
+   110→2. Session management unchanged
+   111→3. Logout flow intact
+   112→
+   113→### Success Metrics
+   114→- pass@3 > 90% for capability evals
+   115→- pass^3 = 100% for regression evals
+   116→```
+   117→
+   118→### 2. Implement
+   119→Write code to pass the defined evals.
+   120→
+   121→### 3. Evaluate
+   122→```bash
+   123→# Run capability evals
+   124→[Run each capability eval, record PASS/FAIL]
+   125→
+   126→# Run regression evals
+   127→npm test -- --testPathPattern="existing"
+   128→
+   129→# Generate report
+   130→```
+   131→
+   132→### 4. Report
+   133→```markdown
+   134→EVAL REPORT: feature-xyz
+   135→========================
+   136→
+   137→Capability Evals:
+   138→  create-user:     PASS (pass@1)
+   139→  validate-email:  PASS (pass@2)
+   140→  hash-password:   PASS (pass@1)
+   141→  Overall:         3/3 passed
+   142→
+   143→Regression Evals:
+   144→  login-flow:      PASS
+   145→  session-mgmt:    PASS
+   146→  logout-flow:     PASS
+   147→  Overall:         3/3 passed
+   148→
+   149→Metrics:
+   150→  pass@1: 67% (2/3)
+   151→  pass@3: 100% (3/3)
+   152→
+   153→Status: READY FOR REVIEW
+   154→```
+   155→
+   156→## Integration Patterns
+   157→
+   158→### Pre-Implementation
+   159→```
+   160→/eval define feature-name
+   161→```
+   162→Creates eval definition file at `.claude/evals/feature-name.md`
+   163→
+   164→### During Implementation
+   165→```
+   166→/eval check feature-name
+   167→```
+   168→Runs current evals and reports status
+   169→
+   170→### Post-Implementation
+   171→```
+   172→/eval report feature-name
+   173→```
+   174→Generates full eval report
+   175→
+   176→## Eval Storage
+   177→
+   178→Store evals in project:
+   179→```
+   180→.claude/
+   181→  evals/
+   182→    feature-xyz.md      # Eval definition
+   183→    feature-xyz.log     # Eval run history
+   184→    baseline.json       # Regression baselines
+   185→```
+   186→
+   187→## Best Practices
+   188→
+   189→1. **Define evals BEFORE coding** - Forces clear thinking about success criteria
+   190→2. **Run evals frequently** - Catch regressions early
+   191→3. **Track pass@k over time** - Monitor reliability trends
+   192→4. **Use code graders when possible** - Deterministic > probabilistic
+   193→5. **Human review for security** - Never fully automate security checks
+   194→6. **Keep evals fast** - Slow evals don't get run
+   195→7. **Version evals with code** - Evals are first-class artifacts
+   196→
+   197→## Example: Adding Authentication
+   198→
+   199→```markdown
+   200→## EVAL: add-authentication
+   201→
+   202→### Phase 1: Define (10 min)
+   203→Capability Evals:
+   204→- [ ] User can register with email/password
+   205→- [ ] User can login with valid credentials
+   206→- [ ] Invalid credentials rejected with proper error
+   207→- [ ] Sessions persist across page reloads
+   208→- [ ] Logout clears session
+   209→
+   210→Regression Evals:
+   211→- [ ] Public routes still accessible
+   212→- [ ] API responses unchanged
+   213→- [ ] Database schema compatible
+   214→
+   215→### Phase 2: Implement (varies)
+   216→[Write code]
+   217→
+   218→### Phase 3: Evaluate
+   219→Run: /eval check add-authentication
+   220→
+   221→### Phase 4: Report
+   222→EVAL REPORT: add-authentication
+   223→==============================
+   224→Capability: 5/5 passed (pass@3: 100%)
+   225→Regression: 3/3 passed (pass^3: 100%)
+   226→Status: SHIP IT
+   227→```
+   228→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

@@ -1,0 +1,10 @@
+CLAUDE.md
+sessions
+statusline.json
+user-CLAUDE.md
+---
+zh-TW
+---
+hooks.schema.json
+package-manager.schema.json
+plugin.schema.json

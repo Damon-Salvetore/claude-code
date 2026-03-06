@@ -1,0 +1,428 @@
+#!/usr/bin/env python3
+"""
+collect_results.py — Collect and compare NVFP4 experiment results.
+
+Modes:
+  1. From wandb API (default):  python collect_results.py
+  2. From local logs:           python collect_results.py --from-logs
+  3. Export CSV curves:          python collect_results.py --export-csv
+
+Output:
+  - Summary comparison table printed to stdout
+  - Optional CSV files for loss/gnorm curves
+"""
+
+import argparse
+import os
+import re
+import sys
+import json
+from collections import defaultdict
+from pathlib import Path
+
+# -------- Constants --------
+MODELS = ["Base-0.4B", "GatedAttn-0.4B", "DiffAttn-0.4B", "GatedDiffAttn-0.4B"]
+MODES = ["baseline", "nvfp4"]
+WANDB_PROJECT = "nvfp4_experiment"
+WANDB_ENTITY = "3259482542-south-china-university-of-technology"
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent.parent
+LOG_DIR = PROJECT_DIR / "logs"
+OUTPUT_DIR = PROJECT_DIR / "results" / "nvfp4_experiment"
+
+
+def get_run_names():
+    """Generate all expected run names."""
+    return [f"{model}-{mode}" for model in MODELS for mode in MODES]
+
+
+# ============================================================
+#  wandb API collection
+# ============================================================
+def collect_from_wandb(export_csv=False):
+    """Pull metrics from wandb API for all 8 runs."""
+    try:
+        import wandb
+    except ImportError:
+        print("ERROR: wandb not installed. Install with: pip install wandb")
+        print("       Or use --from-logs to parse local log files instead.")
+        sys.exit(1)
+
+    api = wandb.Api()
+    run_names = get_run_names()
+
+    print(f"Fetching runs from wandb: {WANDB_ENTITY}/{WANDB_PROJECT}")
+    print(f"Looking for runs: {run_names}")
+    print()
+
+    # Fetch all runs in the project
+    runs = api.runs(f"{WANDB_ENTITY}/{WANDB_PROJECT}")
+    run_map = {}
+    for run in runs:
+        if run.name in run_names:
+            run_map[run.name] = run
+
+    # Report missing runs
+    missing = set(run_names) - set(run_map.keys())
+    if missing:
+        print(f"WARNING: Missing runs: {missing}")
+        print()
+
+    # -------- Collect final metrics --------
+    results = {}
+    curves = {}
+
+    for name, run in run_map.items():
+        summary = run.summary
+        results[name] = {
+            "final_loss": summary.get("train/train_loss", None),
+            "final_gnorm": summary.get("train/gnorm", None),
+            "final_lr": summary.get("train/lr", None),
+            "final_throughput": summary.get("train/throughput", None),
+            "final_cuda_gb": summary.get("train/cuda_gb_allocated", None),
+            "final_flops": summary.get("train/FLOPS", None),
+            "state": run.state,
+            "runtime_seconds": run.summary.get("_runtime", None),
+        }
+
+        # -------- Collect curves for CSV export --------
+        if export_csv:
+            print(f"  Fetching history for {name}...")
+            history = run.history(
+                keys=["train/train_loss", "train/gnorm", "train/lr", "train/throughput"],
+                samples=10000,
+            )
+            curves[name] = history
+
+    # -------- Print summary table --------
+    print_summary_table(results)
+
+    # -------- Print comparison table (baseline vs nvfp4 per model) --------
+    print_comparison_table(results)
+
+    # -------- Print grad norm stability --------
+    print_gnorm_stability(results)
+
+    # -------- Export CSV curves --------
+    if export_csv:
+        export_curves_csv(curves)
+
+
+# ============================================================
+#  Local log file collection
+# ============================================================
+def collect_from_logs(export_csv=False):
+    """Parse metrics from local log files."""
+    run_names = get_run_names()
+
+    print(f"Parsing logs from: {LOG_DIR}")
+    print()
+
+    results = {}
+    curves = {}
+
+    for name in run_names:
+        log_file = LOG_DIR / f"{name}.log"
+        if not log_file.exists():
+            print(f"  SKIP: {log_file} not found")
+            continue
+
+        print(f"  Parsing: {log_file}")
+        parsed = parse_log_file(log_file)
+        if parsed["steps"]:
+            last_idx = -1
+            results[name] = {
+                "final_loss": parsed["train_loss"][last_idx] if parsed["train_loss"] else None,
+                "final_gnorm": parsed["gnorm"][last_idx] if parsed["gnorm"] else None,
+                "final_lr": parsed["lr"][last_idx] if parsed["lr"] else None,
+                "final_throughput": parsed["throughput"][last_idx] if parsed["throughput"] else None,
+                "final_cuda_gb": None,
+                "final_flops": None,
+                "state": "finished" if len(parsed["steps"]) > 0 else "unknown",
+                "runtime_seconds": None,
+                "total_steps": parsed["steps"][last_idx] if parsed["steps"] else 0,
+            }
+
+            if export_csv:
+                import pandas as pd
+                max_len = len(parsed["steps"])
+                curves[name] = pd.DataFrame({
+                    "_step": parsed["steps"][:max_len],
+                    "train/train_loss": parsed["train_loss"][:max_len],
+                    "train/gnorm": parsed["gnorm"][:max_len],
+                    "train/lr": parsed["lr"][:max_len],
+                    "train/throughput": parsed["throughput"][:max_len],
+                })
+
+    if not results:
+        print("\nNo log files found. Have the experiments started?")
+        return
+
+    print()
+
+    # -------- Print tables --------
+    print_summary_table(results)
+    print_comparison_table(results)
+    print_gnorm_stability_from_logs(LOG_DIR, get_run_names())
+
+    if export_csv:
+        export_curves_csv(curves)
+
+
+def parse_log_file(log_file):
+    """Parse an nnscaler training log file for key metrics.
+
+    nnscaler logs metrics in JSON-like format. We look for patterns like:
+    - train_loss: X.XXX  or  "train_loss": X.XXX
+    - gnorm: X.XXX
+    - lr: X.XXX
+    - throughput: X.XXX
+    """
+    data = {
+        "steps": [],
+        "train_loss": [],
+        "gnorm": [],
+        "lr": [],
+        "throughput": [],
+        "train_wall": [],
+    }
+
+    step_pattern = re.compile(r'(?:step[s]?\s*[=:]\s*|Step\s+)(\d+)')
+    loss_pattern = re.compile(r'train_loss["\s:=]+([0-9]+\.[0-9]+)')
+    gnorm_pattern = re.compile(r'gnorm["\s:=]+([0-9]+\.[0-9]+)')
+    lr_pattern = re.compile(r'"lr"["\s:=]+([0-9]+\.?[0-9eE\-]+)')
+    throughput_pattern = re.compile(r'throughput["\s:=]+([0-9]+\.?[0-9]*)')
+    wall_pattern = re.compile(r'train_wall["\s:=]+([0-9]+\.?[0-9]*)')
+
+    with open(log_file, 'r', errors='replace') as f:
+        for line in f:
+            loss_match = loss_pattern.search(line)
+            if loss_match:
+                step_match = step_pattern.search(line)
+                step = int(step_match.group(1)) if step_match else len(data["steps"]) + 1
+
+                data["steps"].append(step)
+                data["train_loss"].append(float(loss_match.group(1)))
+
+                gm = gnorm_pattern.search(line)
+                data["gnorm"].append(float(gm.group(1)) if gm else None)
+
+                lm = lr_pattern.search(line)
+                data["lr"].append(float(lm.group(1)) if lm else None)
+
+                tm = throughput_pattern.search(line)
+                data["throughput"].append(float(tm.group(1)) if tm else None)
+
+                wm = wall_pattern.search(line)
+                data["train_wall"].append(float(wm.group(1)) if wm else None)
+
+    return data
+
+
+# ============================================================
+#  Display helpers
+# ============================================================
+def print_summary_table(results):
+    """Print a summary table of all experiments."""
+    print("=" * 100)
+    print("  EXPERIMENT SUMMARY")
+    print("=" * 100)
+    header = f"{'Run Name':<30} {'Status':<10} {'Loss(BPB)':<12} {'GNorm':<10} {'Throughput':<12} {'GPU(GB)':<10}"
+    print(header)
+    print("-" * 100)
+
+    for name in get_run_names():
+        if name not in results:
+            print(f"{name:<30} {'MISSING':<10}")
+            continue
+        r = results[name]
+        loss = f"{r['final_loss']:.4f}" if r['final_loss'] is not None else "-"
+        gnorm = f"{r['final_gnorm']:.4f}" if r['final_gnorm'] is not None else "-"
+        tput = f"{r['final_throughput']:.0f}" if r['final_throughput'] is not None else "-"
+        cuda_gb = f"{r['final_cuda_gb']:.1f}" if r['final_cuda_gb'] is not None else "-"
+        state = r.get('state', '-')
+        print(f"{name:<30} {state:<10} {loss:<12} {gnorm:<10} {tput:<12} {cuda_gb:<10}")
+
+    print()
+
+
+def print_comparison_table(results):
+    """Print baseline vs nvfp4 comparison per model."""
+    print("=" * 100)
+    print("  BASELINE vs NVFP4 COMPARISON")
+    print("=" * 100)
+    header = f"{'Model':<25} {'BL Loss':<12} {'NV Loss':<12} {'Δ Loss':<12} {'Δ Loss%':<10} {'BL Tput':<12} {'NV Tput':<12}"
+    print(header)
+    print("-" * 100)
+
+    for model in MODELS:
+        bl_name = f"{model}-baseline"
+        nv_name = f"{model}-nvfp4"
+
+        bl = results.get(bl_name, {})
+        nv = results.get(nv_name, {})
+
+        bl_loss = bl.get('final_loss')
+        nv_loss = nv.get('final_loss')
+        bl_tput = bl.get('final_throughput')
+        nv_tput = nv.get('final_throughput')
+
+        bl_loss_str = f"{bl_loss:.4f}" if bl_loss is not None else "-"
+        nv_loss_str = f"{nv_loss:.4f}" if nv_loss is not None else "-"
+        bl_tput_str = f"{bl_tput:.0f}" if bl_tput is not None else "-"
+        nv_tput_str = f"{nv_tput:.0f}" if nv_tput is not None else "-"
+
+        if bl_loss is not None and nv_loss is not None:
+            delta = nv_loss - bl_loss
+            delta_pct = (delta / bl_loss) * 100
+            delta_str = f"{delta:+.4f}"
+            delta_pct_str = f"{delta_pct:+.2f}%"
+        else:
+            delta_str = "-"
+            delta_pct_str = "-"
+
+        print(f"{model:<25} {bl_loss_str:<12} {nv_loss_str:<12} {delta_str:<12} {delta_pct_str:<10} {bl_tput_str:<12} {nv_tput_str:<12}")
+
+    print()
+
+
+def print_gnorm_stability(results):
+    """Print grad norm stability comparison (from wandb summary only)."""
+    print("=" * 100)
+    print("  GRAD NORM STABILITY (final gnorm)")
+    print("=" * 100)
+    header = f"{'Model':<25} {'BL GNorm':<12} {'NV GNorm':<12} {'Δ GNorm':<12}"
+    print(header)
+    print("-" * 100)
+
+    for model in MODELS:
+        bl_name = f"{model}-baseline"
+        nv_name = f"{model}-nvfp4"
+
+        bl_gnorm = results.get(bl_name, {}).get('final_gnorm')
+        nv_gnorm = results.get(nv_name, {}).get('final_gnorm')
+
+        bl_str = f"{bl_gnorm:.4f}" if bl_gnorm is not None else "-"
+        nv_str = f"{nv_gnorm:.4f}" if nv_gnorm is not None else "-"
+
+        if bl_gnorm is not None and nv_gnorm is not None:
+            delta = nv_gnorm - bl_gnorm
+            delta_str = f"{delta:+.4f}"
+        else:
+            delta_str = "-"
+
+        print(f"{model:<25} {bl_str:<12} {nv_str:<12} {delta_str:<12}")
+
+    print()
+
+
+def print_gnorm_stability_from_logs(log_dir, run_names):
+    """Compute grad norm statistics from local logs."""
+    print("=" * 100)
+    print("  GRAD NORM STABILITY (from local logs)")
+    print("=" * 100)
+    header = f"{'Run Name':<30} {'Mean GNorm':<12} {'Std GNorm':<12} {'Max GNorm':<12} {'Samples':<10}"
+    print(header)
+    print("-" * 100)
+
+    for name in run_names:
+        log_file = log_dir / f"{name}.log"
+        if not log_file.exists():
+            print(f"{name:<30} {'NO LOG':<12}")
+            continue
+
+        parsed = parse_log_file(log_file)
+        gnorms = [g for g in parsed["gnorm"] if g is not None]
+
+        if not gnorms:
+            print(f"{name:<30} {'NO DATA':<12}")
+            continue
+
+        import statistics
+        mean_g = statistics.mean(gnorms)
+        std_g = statistics.stdev(gnorms) if len(gnorms) > 1 else 0.0
+        max_g = max(gnorms)
+        n = len(gnorms)
+
+        print(f"{name:<30} {mean_g:<12.4f} {std_g:<12.4f} {max_g:<12.4f} {n:<10}")
+
+    print()
+
+
+# ============================================================
+#  CSV export
+# ============================================================
+def export_curves_csv(curves):
+    """Export training curves to CSV files."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    for name, data in curves.items():
+        csv_path = OUTPUT_DIR / f"{name}_curves.csv"
+        try:
+            import pandas as pd
+            if isinstance(data, pd.DataFrame):
+                data.to_csv(csv_path, index=False)
+            else:
+                data.to_csv(csv_path)
+            print(f"  Exported: {csv_path}")
+        except Exception as e:
+            print(f"  ERROR exporting {name}: {e}")
+
+    # -------- Also export a combined comparison CSV --------
+    try:
+        import pandas as pd
+        all_losses = {}
+        for name, data in curves.items():
+            if isinstance(data, pd.DataFrame):
+                df = data
+            else:
+                df = data
+            if "_step" in df.columns:
+                all_losses[f"{name}_step"] = df["_step"].values
+            if "train/train_loss" in df.columns:
+                all_losses[f"{name}_loss"] = df["train/train_loss"].values
+
+        if all_losses:
+            # Pad to same length
+            max_len = max(len(v) for v in all_losses.values())
+            import numpy as np
+            padded = {}
+            for k, v in all_losses.items():
+                padded[k] = np.pad(v.astype(float), (0, max_len - len(v)),
+                                   constant_values=np.nan)
+            combined = pd.DataFrame(padded)
+            combined_path = OUTPUT_DIR / "combined_loss_comparison.csv"
+            combined.to_csv(combined_path, index=False)
+            print(f"  Exported: {combined_path}")
+    except Exception as e:
+        print(f"  ERROR exporting combined CSV: {e}")
+
+    print()
+
+
+# ============================================================
+#  Main
+# ============================================================
+def main():
+    parser = argparse.ArgumentParser(description="Collect and compare NVFP4 experiment results")
+    parser.add_argument("--from-logs", action="store_true",
+                        help="Parse results from local log files instead of wandb API")
+    parser.add_argument("--export-csv", action="store_true",
+                        help="Export training curves to CSV files")
+    args = parser.parse_args()
+
+    print()
+    print("╔══════════════════════════════════════════════════╗")
+    print("║       NVFP4 W4A4 Experiment Results Collector    ║")
+    print("╚══════════════════════════════════════════════════╝")
+    print()
+
+    if args.from_logs:
+        collect_from_logs(export_csv=args.export_csv)
+    else:
+        collect_from_wandb(export_csv=args.export_csv)
+
+
+if __name__ == "__main__":
+    main()

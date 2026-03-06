@@ -1,0 +1,67 @@
+from dataclasses import dataclass
+
+
+@dataclass
+class ModelArgs:
+    d_model: int = 4096
+    d_ffn: int = 14336
+    head: int = 32
+    cross_head: int = None
+    kv_head: int = 8
+    head_dim: int = None
+    n_layers: int = 32
+    vocab_size: int = 201088
+    max_seq_len: int = 4096
+    norm_eps: float = 1e-6
+    rope_theta: float = 10000.0
+    qk_norm: bool = False
+    attention_bias: bool = False
+    weight_tying: bool = False
+    cross_entropy_chunk: int = 1
+    gated_attention: bool = False
+    diff_attention: bool = False
+    # YOCO config
+    yoco_cross_layers: int = 0
+    yoco_window_size: int = 256
+    universal_loop: int = 1
+    # moe
+    moe: bool = False
+    moe_ffn_dim: int = 512
+    moe_expert_num: int = 32
+    moe_top_k: int = 8
+    moe_loss_scale: float = 0.1
+    # global: global load balance;
+    # domain: load balance within each domain;
+    # subset: use "tag":"instruction,disable_balance_loss" to disable load balance loss for some sets.
+    #   This is useful when adding new data sets (e.g. instruction/high-quality data) to an existing
+    #   pre-training mixture. The idea is to only compute balance loss on the original PT data portion
+    #   to keep expert routing stable, while the newly added sets have their balance loss weight set to
+    #   zero (by tagging them with "disable_balance_loss"). As long as the original PT data's expert
+    #   distribution remains unchanged, it prevents expert drift/mutation even when the new sets don't
+    #   contribute to the balance loss. For example, if new data is 15% and original PT data is 85%,
+    #   only the 85% PT data computes balance loss, which is sufficient to maintain routing stability.
+    balance_mode: str = 'global'
+    d_shared_expert: int = 0
+    dense_layers: int = 0
+    # if set, each rank in a scale unit whose size is `plan_ngpus` will read different data shard,
+    # and the dataloader config is set w.r.t each rank. Before feeding into the model, a allgather
+    # will be performed to gather the data from all ranks in the scale unit. If not set, each rank
+    # will read the same data shard, and the dataloader config is set w.r.t the scale unit.
+    dp_sharded: bool = False
+    # if set, use cute flash attention implementation
+    use_cute: bool = False
+    z_loss_scale: float = 0.0
+    z_loss_start_step: int = 10000
+    z_loss_warmup_step: int = 1000
+    fp8_mode: int = 0  # 0: disable, 1: fp8 fake quant, 2: fp8 quant
+    nvfp4_mode: int = 0
+    # 0: disable
+    # 1: FFN NVFP4 W4A4 fake quant
+    # 2: FFN+QKVO NVFP4 W4A4 fake quant
+    # 3: FFN+QKVO MXFP4(W4)+MXFP8(A8) fake quant (OCP MX format, Blackwell W4A8)
+
+    def __post_init__(self):
+        if self.head_dim is None:
+            self.head_dim = self.d_model // self.head
+        if self.cross_head is None:
+            self.cross_head = self.head

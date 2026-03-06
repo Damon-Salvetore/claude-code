@@ -1,0 +1,215 @@
+"""MXFP4 (weight) + MXFP8 (activation) fake quantization for training.
+
+Implements OCP MX format fake quantization for Blackwell W4A8 inference:
+  - MXFP4 (weight): FP4 E2M1 elements, block size 32, E8M0 scale (power-of-2 only)
+  - MXFP8 (activation): FP8 E4M3 elements, block size 32, E8M0 scale (power-of-2 only)
+
+Key differences from NVFP4 (nvfp4_quant.py):
+  - Block size: 32 (NVFP4 uses 16)
+  - Scale format: E8M0 = 2^ceil(log2(amax)) (NVFP4 uses FP8 E4M3 two-level scale)
+  - No second-level scale quantization (NVFP4 has per-tensor FP32 second-level)
+
+E8M0 scale format:
+  - 8 exponent bits, 0 mantissa bits -> value = 2^(exponent - bias)
+  - Only power-of-2 values: ..., 0.25, 0.5, 1.0, 2.0, 4.0, ...
+  - Quantization: scale_e8m0 = 2^ceil(log2(scale))
+
+Usage:
+  from kernel.mxfp_quant import mxfp4_fake_quant, mxfp8_fake_quant
+  w_quantized = mxfp4_fake_quant(weight)       # MXFP4 for weights
+  a_quantized = mxfp8_fake_quant(activation)   # MXFP8 for activations
+"""
+
+import torch
+
+from .nvfp4_quant import _FP4_VALUES, _FP4_BOUNDS, _FP4_MAX, _FP8_E4M3_MAX
+
+# OCP MX format block size (shared by MXFP4 and MXFP8)
+MXFP_BLOCK_SIZE = 32
+
+
+def _get_fp4_tables(device: torch.device):
+    """Get FP4 value and boundary tables on the specified device."""
+    values = torch.tensor(_FP4_VALUES, dtype=torch.float32, device=device)
+    bounds = torch.tensor(_FP4_BOUNDS, dtype=torch.float32, device=device)
+    return values, bounds
+
+
+@torch.compile
+def _e8m0_quantize(scale: torch.Tensor) -> torch.Tensor:
+    """Quantize scale factors to E8M0 format (power-of-2 only).
+
+    E8M0 has 8 exponent bits and 0 mantissa bits, so representable values
+    are exactly powers of 2: 2^n for integer n.
+
+    Quantization: ceil(log2(scale)) to ensure scale >= amax / format_max,
+    so that scaled elements never exceed the format's representable range.
+    This matches NVIDIA modelopt's E8M0 implementation (compute_scale_e8m0_NV).
+
+    Using round() instead of ceil() would cause ~50% of blocks to have a
+    scale too small, leading to element overflow and clipping artifacts.
+
+    Args:
+        scale: Per-block scale factors, shape [num_blocks, 1].
+
+    Returns:
+        E8M0-quantized scale factors (powers of 2), same shape.
+    """
+    return torch.exp2(torch.ceil(torch.log2(scale.clamp(min=1e-12))))
+
+
+@torch.compile
+def _mxfp4_fake_quant_impl(
+    x: torch.Tensor,
+    fp4_values: torch.Tensor,
+    fp4_bounds: torch.Tensor,
+) -> torch.Tensor:
+    """MXFP4 fake quantization core implementation (OCP MX format).
+
+    Single-level quantization with E8M0 scale:
+      1. Reshape to blocks of 32
+      2. Per-block amax -> scale = amax / FP4_MAX (6.0)
+      3. Quantize scale to E8M0: snap to nearest power of 2
+      4. Normalize elements by E8M0 scale
+      5. Map to nearest FP4 E2M1 value via searchsorted
+      6. Reconstruct: sign * fp4_value * e8m0_scale
+
+    Args:
+        x: Input tensor, total elements must be divisible by MXFP_BLOCK_SIZE (32).
+        fp4_values: FP4 E2M1 value lookup table [8].
+        fp4_bounds: FP4 E2M1 decision boundary table [7].
+
+    Returns:
+        Fake-quantized tensor with same shape and dtype as input.
+    """
+    orig_shape = x.shape
+    orig_dtype = x.dtype
+
+    # Flatten to [num_blocks, block_size=32]
+    x_flat = x.reshape(-1, MXFP_BLOCK_SIZE).float()
+
+    # Per-block dynamic amax and scale
+    amax = x_flat.abs().amax(dim=-1, keepdim=True)
+    scale = (amax / _FP4_MAX).clamp(min=1e-12)
+
+    # E8M0 scale quantization: snap to nearest power of 2
+    scale = _e8m0_quantize(scale)
+
+    # Normalize to FP4 range
+    abs_scaled = x_flat.abs() / scale
+
+    # Map to nearest FP4 E2M1 value using searchsorted
+    indices = torch.searchsorted(fp4_bounds, abs_scaled)
+    q_val = fp4_values[indices]
+
+    # Reconstruct: sign * quantized_value * e8m0_scale
+    result = x_flat.sign() * q_val * scale
+
+    return result.to(orig_dtype).reshape(orig_shape)
+
+
+@torch.compile
+def _mxfp8_fake_quant_impl(x: torch.Tensor) -> torch.Tensor:
+    """MXFP8 fake quantization core implementation (OCP MX format).
+
+    Single-level quantization with E8M0 scale:
+      1. Reshape to blocks of 32
+      2. Per-block amax -> scale = amax / FP8_E4M3_MAX (448.0)
+      3. Quantize scale to E8M0: snap to nearest power of 2
+      4. Scale elements, cast to float8_e4m3fn (quantize), cast back (dequantize)
+      5. Unscale by E8M0 scale
+
+    Args:
+        x: Input tensor, total elements must be divisible by MXFP_BLOCK_SIZE (32).
+
+    Returns:
+        Fake-quantized tensor with same shape and dtype as input.
+    """
+    orig_shape = x.shape
+    orig_dtype = x.dtype
+
+    # Flatten to [num_blocks, block_size=32]
+    x_flat = x.reshape(-1, MXFP_BLOCK_SIZE).float()
+
+    # Per-block dynamic amax and scale
+    amax = x_flat.abs().amax(dim=-1, keepdim=True)
+    scale = (amax / _FP8_E4M3_MAX).clamp(min=1e-12)
+
+    # E8M0 scale quantization: snap to nearest power of 2
+    scale = _e8m0_quantize(scale)
+
+    # Scale up -> cast to FP8 E4M3 (quantize) -> cast back (dequantize) -> scale down
+    x_scaled = x_flat / scale
+    x_fp8 = x_scaled.to(torch.float8_e4m3fn).to(torch.float32)
+    result = x_fp8 * scale
+
+    return result.to(orig_dtype).reshape(orig_shape)
+
+
+class MXFP4FakeQuant(torch.autograd.Function):
+    """MXFP4 fake quantization with STE (Straight-Through Estimator) backward.
+
+    Forward: OCP MX format FP4 E2M1 quantize + dequantize (block=32, E8M0 scale)
+    Backward: gradient passes through unchanged (pure STE)
+    """
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+        fp4_values, fp4_bounds = _get_fp4_tables(x.device)
+        return _mxfp4_fake_quant_impl(x, fp4_values, fp4_bounds)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        return grad_output
+
+
+class MXFP8FakeQuant(torch.autograd.Function):
+    """MXFP8 fake quantization with STE (Straight-Through Estimator) backward.
+
+    Forward: OCP MX format FP8 E4M3 quantize + dequantize (block=32, E8M0 scale)
+    Backward: gradient passes through unchanged (pure STE)
+    """
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+        return _mxfp8_fake_quant_impl(x)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        return grad_output
+
+
+def mxfp4_fake_quant(x: torch.Tensor) -> torch.Tensor:
+    """Apply MXFP4 (FP4 E2M1, OCP MX format) fake quantization with STE gradient.
+
+    OCP MX format for weights:
+      - Elements: FP4 E2M1 (block size 32, nearest-value rounding)
+      - Per-block scale: E8M0 (power-of-2 only, no second-level quantization)
+
+    The tensor's total number of elements must be divisible by 32 (MX block size).
+
+    Args:
+        x: Input tensor. numel() must be divisible by 32.
+
+    Returns:
+        Fake-quantized tensor with same shape and dtype as input.
+    """
+    return MXFP4FakeQuant.apply(x)
+
+
+def mxfp8_fake_quant(x: torch.Tensor) -> torch.Tensor:
+    """Apply MXFP8 (FP8 E4M3, OCP MX format) fake quantization with STE gradient.
+
+    OCP MX format for activations:
+      - Elements: FP8 E4M3 (block size 32, hardware cast rounding)
+      - Per-block scale: E8M0 (power-of-2 only, no second-level quantization)
+
+    The tensor's total number of elements must be divisible by 32 (MX block size).
+
+    Args:
+        x: Input tensor. numel() must be divisible by 32.
+
+    Returns:
+        Fake-quantized tensor with same shape and dtype as input.
+    """
+    return MXFP8FakeQuant.apply(x)

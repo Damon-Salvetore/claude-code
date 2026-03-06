@@ -1,0 +1,1716 @@
+# 实验配置总结文档
+
+**项目:** NVFP4 W4A4量化 vs FP32基线控制变量实验
+**生成时间:** 2026-03-03（基于 llm-train 项目优化）
+**实验目标:** 研究NVFP4量化对不同注意力架构的影响
+
+---
+
+## 1. 实验目标和设计
+
+### 1.1 研究目标
+- **主要目标:** 评估NVFP4 W4A4量化对不同注意力架构模型的训练稳定性和收敛性影响
+- **控制变量:** Gated Attention vs Differential Attention机制
+- **对比维度:** 标准训练基线 vs NVFP4量化训练
+
+### 1.2 实验设计
+- **实验类型:** 控制变量对比实验
+- **实验组1:** NVFP4 W4A4 FFN-Only 量化训练（`nvfp4_mode=1`，4个模型架构）
+- **实验组2:** NVFP4 W4A4 FFN+QKVO 全量化训练（`nvfp4_mode=2`，4个模型架构）
+- **实验组3:** MXFP4(W4)+MXFP8(A8) FFN+QKVO 全量化训练（`nvfp4_mode=3`，4个模型架构，OCP MX 格式，Blackwell W4A8）
+- **对照组:** 标准训练基线（`nvfp4_mode=0`，4个模型架构，权重fp32+前向bf16+梯度fp32）
+- **评估指标:** 训练损失（BPB）、梯度范数、收敛速度、内存使用、吞吐量
+
+---
+
+## 2. 模型架构配置
+
+### 2.1 模型架构矩阵
+实验涵盖4种模型架构配置：
+
+| 模型名称 | Gated Attention | Differential Attention | 参数量 |
+|---------|-----------------|------------------------|--------|
+| Base-0.4B | ❌ | ❌ | 701M (0.70B) |
+| GatedAttn-0.4B | ✅ | ❌ | 726M (0.73B, +25M gate_proj) |
+| DiffAttn-0.4B | ❌ | ✅ | 726M (0.73B, +25M Q翻倍/lambda_proj) |
+| GatedDiffAttn-0.4B | ✅ | ✅ | 752M (0.75B, +51M) |
+
+> **注意：** 参数量由 `arch.flop_utils.estimate_total_params` 精确计算。虽然模型命名为 "0.4B"（沿用项目中 YOCO-0.4B 的命名规范，YOCO-0.4B 实际参数量为 721M），但 `vocab_size=201088` 的 Embedding 和 Output head 各占约 206M，Transformer 层本身约 289-340M。Gated Attention 每层增加 `gate_proj`（~1.05M/层），Differential Attention 每层 Q 投影翻倍 + `lambda_proj`（~1.07M/层）。这是注意力机制本身的固有差异，不影响控制变量实验的有效性——实验目标是研究这些机制对量化敏感性的影响，而非在完全相同参数量下做对比。
+
+### 2.2 统一架构参数（基于 `llm.arch.config.ModelArgs`）
+
+以下配置需要在 `llm/config.py` 的 `model_args` 字典中添加为新条目：
+
+```python
+# === 添加到 llm/config.py 的 model_args 字典中 ===
+
+model_args = {
+    # ... 已有配置 ...
+
+    # ======== NVFP4 实验模型配置 ========
+    "Base-0.4B": ModelArgs(
+        d_model=1024,
+        d_ffn=3072,
+        head=16,
+        kv_head=4,
+        head_dim=None,           # 自动计算: d_model // head = 64
+        n_layers=24,
+        vocab_size=201088,
+        max_seq_len=4096,
+        qk_norm=False,
+        weight_tying=False,
+        attention_bias=False,
+        norm_eps=1e-6,
+        rope_theta=10000.0,
+        gated_attention=False,
+        diff_attention=False,
+        moe=False,
+        yoco_cross_layers=0,     # 非 YOCO 架构
+        universal_loop=1,        # 标准 Transformer（YOCO-3B 用 3）
+        fp8_mode=0,              # 默认禁用 FP8
+    ),
+    "GatedAttn-0.4B": ModelArgs(
+        d_model=1024,
+        d_ffn=3072,
+        head=16,
+        kv_head=4,
+        head_dim=None,
+        n_layers=24,
+        vocab_size=201088,
+        max_seq_len=4096,
+        qk_norm=False,
+        weight_tying=False,
+        attention_bias=False,
+        norm_eps=1e-6,
+        rope_theta=10000.0,
+        gated_attention=True,    # ✅ 启用门控注意力
+        diff_attention=False,
+        moe=False,
+        yoco_cross_layers=0,
+        universal_loop=1,
+        fp8_mode=0,
+    ),
+    "DiffAttn-0.4B": ModelArgs(
+        d_model=1024,
+        d_ffn=3072,
+        head=16,
+        kv_head=4,
+        head_dim=None,
+        n_layers=24,
+        vocab_size=201088,
+        max_seq_len=4096,
+        qk_norm=False,
+        weight_tying=False,
+        attention_bias=False,
+        norm_eps=1e-6,
+        rope_theta=10000.0,
+        gated_attention=False,
+        diff_attention=True,     # ✅ 启用差分注意力
+        moe=False,
+        yoco_cross_layers=0,
+        universal_loop=1,
+        fp8_mode=0,
+    ),
+    "GatedDiffAttn-0.4B": ModelArgs(
+        d_model=1024,
+        d_ffn=3072,
+        head=16,
+        kv_head=4,
+        head_dim=None,
+        n_layers=24,
+        vocab_size=201088,
+        max_seq_len=4096,
+        qk_norm=False,
+        weight_tying=False,
+        attention_bias=False,
+        norm_eps=1e-6,
+        rope_theta=10000.0,
+        gated_attention=True,    # ✅ 启用门控注意力
+        diff_attention=True,     # ✅ 启用差分注意力
+        moe=False,
+        yoco_cross_layers=0,
+        universal_loop=1,
+        fp8_mode=0,
+    ),
+}
+```
+
+**关键说明:**
+- `head_dim=None`：由 `ModelArgs.__post_init__` 自动计算为 `d_model // head = 64`
+- `cross_head` 默认为 `None`，由 `__post_init__` 设为与 `head` 相同（仅 YOCO 架构使用）
+- `yoco_cross_layers=0`：禁用 YOCO 跨层注意力，使用标准 Transformer 架构
+- `moe=False`：使用 Dense FFN (`FeedForwardNetwork`)，而非 MoE
+
+### 2.3 注意力机制特殊配置
+
+#### 2.3.1 Gated Attention（`llm.arch.attention.Attention`）
+```python
+# 启用后，Attention 模块内部添加 gate_proj 投影层
+# 具体实现（attention.py 第68行）：
+self.gate_proj = MixPrecisionLinear(args.d_model, self.head * self.head_dim, bias=args.attention_bias)
+
+# 前向传播中的门控计算（attention.py 第88-91, 125-126行）：
+gate = self.gate_proj(x)              # 计算门控信号
+output = glu(output, gate)            # glu(x, gate) = x * sigmoid(gate)
+```
+- **功能:** 为注意力输出添加 sigmoid 门控机制，提升模型表达能力
+- **额外参数量:** `d_model × (head × head_dim)` = 1024 × 1024 ≈ 1M 参数/层
+
+#### 2.3.2 Differential Attention（`llm.arch.attention.Attention`）
+```python
+# 启用后，Q投影维度翻倍，额外添加 lambda_proj 投影层
+# 具体实现（attention.py 第52, 69行）：
+q_proj_dim = 2 * self.head * self.head_dim   # Q 维度翻倍
+self.lambda_proj = MixPrecisionLinear(args.d_model, self.head, bias=False)
+
+# 前向传播中的差分计算（attention.py 第121-123行）：
+attn1, attn2 = output[:, 0::2], output[:, 1::2]   # 将注意力头分为两组
+output = diff(attn1, attn2, self.lambda_proj(x))    # attn1 - sigmoid(λ) * attn2
+```
+- **功能:** 使用差分注意力计算，将注意力头分为两组并做差分，改善注意力分布
+- **额外参数量:** Q 投影翻倍 + lambda_proj ≈ 1M+ 参数/层
+
+---
+
+## 3. 训练配置
+
+### 3.1 训练超参数（基于 `llm.config.TrainerArgs`）
+
+基于项目已有的 `warmup_constant` 配置，针对 10K 步短实验场景做调整：
+
+```python
+# === 添加到 llm/config.py 的 training_args 字典中 ===
+# 参考项目已有配置:
+#   "warmup_constant": TrainerArgs(max_updates=1000000000, lr_decay_iters=1000000000,
+#       learning_rate=3.2e-4, min_lr=1e-5, warmup_iters=2000, beta1=0.9, beta2=0.95,
+#       adam_eps=1e-8, weight_decay=0.1, clip_grad_norm=1.0, constant_lr=True)
+
+training_args = {
+    # ... 已有配置 ...
+
+    # ======== NVFP4 实验训练配置 ========
+    "nvfp4_experiment": TrainerArgs(
+        seed=42,                          # 实验随机种子（对比一致性）
+        max_updates=10000,                # 训练总步数（实验规模）
+        warmup_iters=2000,                # 预热步数（与项目一致）
+        learning_rate=6e-4,               # 峰值学习率（与项目 YOCO-3B 训练一致）
+        min_lr=3e-5,                      # 最小学习率（峰值的 ~5%，余弦衰减终点）
+        beta1=0.9,                        # Adam β1（与项目一致）
+        beta2=0.95,                       # Adam β2（与项目一致）
+        adam_eps=1e-8,                     # Adam epsilon（与项目一致）
+        weight_decay=0.1,                 # 权重衰减（与项目一致）
+        clip_grad_norm=1.0,               # 梯度裁剪范数（与项目一致）
+        update_freq=2,                    # 梯度累积步数（与项目 YOCO-3B 一致）
+        save_interval=1000,               # 检查点保存间隔
+        checkpoint_dir='/tmp/checkpoints',
+        wandb_project='nvfp4_experiment', # WandB 项目名
+    ),
+}
+```
+
+**与项目 `warmup_constant` 的关系：**
+- **对齐项目的配置：** `learning_rate=6e-4`, `warmup_iters=2000`, `update_freq=2`, 以及所有优化器超参数（beta1/beta2/weight_decay/clip_grad_norm/adam_eps）
+- **实验特有的调整：** `min_lr=3e-5`（余弦衰减）, `max_updates=10000`, `seed=42`
+
+**关于余弦衰减的实现细节：**
+- `TrainerArgs` 中的 `constant_lr` 和 `lr_decay_iters` 字段在 `nnscaler_train.py` 中**未被使用**
+- 调度器 `WarmupCosineAnnealingLR` 只读取 `warmup_iters`、`max_updates`（作为 T_max）和 `min_lr`（作为 eta_min）
+- 项目实现"恒定学习率"的方式是设置 `min_lr = learning_rate`（如 `--min_lr 6e-4 --learning_rate 6e-4`），使余弦衰减振幅为零
+- 本实验设置 `min_lr=3e-5`（远小于 `learning_rate=6e-4`），因此 scheduler 会执行正常的余弦衰减
+
+### 3.2 学习率调度（`llm.warmup_scheduler.WarmupCosineAnnealingLR`）
+
+使用项目原生实现的 `WarmupCosineAnnealingLR` 调度器，线性预热 + 余弦衰减：
+
+```python
+from llm.warmup_scheduler import WarmupCosineAnnealingLR
+
+scheduler = WarmupCosineAnnealingLR(
+    optimizer=optimizer,
+    warmup_steps=2000,      # 预热步数（线性从 0 升至 base_lr）
+    T_max=10000,            # 总训练步数
+    eta_min=3e-5,           # 最小学习率（峰值的 ~5%）
+)
+```
+
+**调度器行为（warmup_scheduler.py 源码逻辑）：**
+```
+阶段1 - 线性预热 (step 0 → 1999):
+  lr = base_lr × (step + 1) / warmup_steps
+  即: 0 → 3e-7 → ... → 6e-4（线性增长）
+
+阶段2 - 余弦衰减 (step 2000 → 9999):
+  lr = eta_min + (base_lr - eta_min) × (1 + cos(π × t / T_adjusted)) / 2
+  即: 6e-4 → ... → 3e-5（平滑衰减）
+```
+
+**与 nnscaler_train.py 中的集成方式：**
+```python
+# nnscaler_train.py 第465-473行
+lrscheduler_config = LRSchedulerConfig(
+    type=WarmupCosineAnnealingLR,
+    args={
+        'warmup_steps': trainer_args.warmup_iters,  # 2000
+        'T_max': trainer_args.max_updates,           # 10000
+        'eta_min': trainer_args.min_lr,              # 3e-5
+    },
+    interval='step',    # 每步更新学习率
+)
+```
+
+### 3.3 优化器配置（`nnscaler.HybridOptimizer`）
+
+项目使用 HybridOptimizer，为 embedding 层和其他参数配置不同的权重衰减：
+
+```python
+# nnscaler_train.py 第431-463行
+
+# 参数分类函数：embedding 层不使用权重衰减
+def param_clss_fn(param_name):
+    if 'tok_embedding' in param_name:
+        return 0, 0    # 类别0：embedding（weight_decay=0）
+    else:
+        return 1, 0    # 类别1：其他参数（weight_decay=0.1）
+
+# 主参数优化器配置
+main_opt_args = {
+    'lr': 6e-4,
+    'betas': (0.9, 0.95),
+    'weight_decay': 0.1,
+    'fused': True,          # 使用 CUDA fused 实现
+    'eps': 1e-8,
+}
+
+# Embedding 优化器配置（无权重衰减）
+embed_opt_args = {
+    'lr': 6e-4,
+    'betas': (0.9, 0.95),
+    'weight_decay': 0.0,    # embedding 不衰减
+    'fused': True,
+    'eps': 1e-8,
+}
+
+# 精度选择：fp32 用 AdamW，bf16 用 MixedPrecisionAdamW
+sub_opt_type = torch.optim.AdamW  # 或 MixedPrecisionAdamW
+
+optimizer_config = OptimizerConfig(
+    type=nnscaler.HybridOptimizer,
+    args={
+        'config': {
+            'optimizers': [
+                {'type': sub_opt_type, 'options': embed_opt_args},
+                {'type': sub_opt_type, 'options': main_opt_args},
+            ]
+        }
+    },
+    param_clss_fn=param_clss_fn,
+    clip_gnorm=1.0,
+    loss_reduction='sum',
+    grad_reduction='per-token-mean',
+    aggregate_outputs_fn=aggregate_outputs_fn,
+)
+```
+
+**与原文档的区别：** 原文档使用了简单的 `torch.optim.AdamW`，实际项目使用 `nnscaler.HybridOptimizer` 对 embedding 和其他参数分组管理，embedding 层不应用权重衰减。
+
+### 3.4 梯度裁剪
+
+```python
+# 基本梯度裁剪
+clip_grad_norm = 1.0
+
+# 可选：预热期特殊梯度裁剪（warmup_clip_grad_norm）
+# 当 warmup_clip_grad_norm 不为 None 时：
+#   - step < warmup_iters * 2/3：使用 warmup_clip_grad_norm
+#   - step >= warmup_iters * 2/3：切换到 clip_grad_norm
+# nnscaler_train.py 第956-963行
+```
+
+### 3.5 精度配置
+**精度配置:** `--precision fp32`（项目标准混合精度模式）
+
+虽然 CLI 参数名为 `fp32`，但实际上是**前向 bf16、梯度 fp32** 的混合精度训练。这是通过模型内部的 `MixPrecisionLinear` 和 `RMSNorm` 实现的，与 `BackBone.__init__` 中的 precision 参数无关。
+
+```python
+# 混合精度的实现机制（模型架构层面，非 BackBone.__init__）：
+
+# 1. 所有线性层使用 MixPrecisionLinear（arch/linear.py）
+#    前向：assert input.dtype == torch.bfloat16 → F.linear(input, weight.to(bf16))
+#    反向：grad_weight = torch.mm(grad_output.t(), input, out_dtype=torch.float32)
+#    → 前向 bf16 计算，权重梯度回传为 fp32
+
+# 2. RMSNorm 强制 bf16 计算（arch/rms_norm.py 第20行）
+#    F.rms_norm(x.to(torch.bfloat16), ..., weight=weight.to(torch.bfloat16))
+
+# 3. 残差连接在 fp32 下进行（arch/model.py Block.forward）
+#    r = self.self_attn(...)   # bf16 输出
+#    h = x + r.float()         # .float() 转 fp32 后做残差加法
+#    r = self.mlp(...)         # bf16 输出
+#    out = h + r.float()       # 同上
+
+# 4. tok_embeddings 是标准 nn.Embedding（fp32 权重），输出 .float() 转 fp32
+#    h = self.tok_embeddings(tokens).float()  # model.py 第73行
+
+# 使用范围：ALL linear layers（q/k/v/o_proj, gate_proj, lambda_proj,
+#           up/down/gate_proj in FFN, output head）均为 MixPrecisionLinear
+# 注意：tok_embeddings 是标准 nn.Embedding，不是 MixPrecisionLinear
+```
+
+```yaml
+# --precision fp32 模式（本实验使用）：
+precision_config:
+  model_weights_storage: "fp32"           # 权重以 fp32 存储
+  forward_computation: "bf16"             # 线性层和 RMSNorm 在 bf16 下计算
+  residual_stream: "fp32"                # 残差连接在 fp32 下（r.float() 后加法）
+  weight_gradients: "fp32"               # 权重梯度 fp32（out_dtype=torch.float32）
+  optimizer_type: "torch.optim.AdamW"    # 标准 AdamW
+  optimizer_states: "fp32"               # m/v 状态 fp32
+
+# --precision bf16 模式（本实验不使用）：
+#   在上述基础上，BackBone.__init__ 额外将权重存储也 cast 到 bf16
+#   优化器改为 MixedPrecisionAdamW
+#   自动启用 --accumulate_allreduce_grads_in_fp32
+```
+
+**本质：** `--precision fp32` 是 **"权重 fp32 + 前向 bf16 + 梯度 fp32"** 的混合精度模式。所有 `MixPrecisionLinear` 层在前向时自动将输入/权重转为 bf16 计算，但反向传播中权重梯度以 fp32 精度累积，优化器在 fp32 下更新权重。
+
+---
+
+## 4. 数据集配置
+
+### 4.1 数据来源：FineWeb 真实数据集
+
+使用项目已配置的 FineWeb 数据集（`llm/config.py` 第76行 `debug` 条目）：
+
+```python
+# === 在 llm/config.py 的 data_args 字典中添加/使用 ===
+# 注意：max_seq_len 和 batch_size 通常通过命令行 --max_seq_len --batch_size 传入，
+# 会同时覆盖 ModelArgs 和 DataLoaderArgs 中的值（config.py parse_nnscaler_args 逻辑）。
+# 因此 data_args 中无需指定这些值，使用 DataLoaderArgs 默认值即可。
+
+data_args = {
+    # 已有的 FineWeb debug 数据集（1B tokens）
+    "debug": DataLoaderArgs(
+        data_path='/mnt/msranlp/lidong1/data/llm_debug/fineweb-1BT.json'
+    ),
+
+    # ======== NVFP4 实验数据集配置 ========
+    # 直接使用已有的 "debug" 条目即可，或新增一个更明确的名称：
+    "nvfp4_fineweb": DataLoaderArgs(
+        data_path='/mnt/msranlp/lidong1/data/llm_debug/fineweb-1BT.json',
+    ),
+    # 其余参数（max_seq_len, batch_size 等）通过命令行传入：
+    #   --max_seq_len 4096 --batch_size 2 --num_workers 2
+}
+```
+
+### 4.2 FineWeb 数据集说明
+- **数据集:** HuggingFace FineWeb，高质量英文网页文本
+- **规模:** 1B tokens（fineweb-1BT），适合 0.7B 模型实验规模
+- **格式:** JSONL，每条记录包含 `"text"` 字段
+- **优势:**
+  - 真实数据分布，反映实际训练场景
+  - 项目已配置路径（`/mnt/msranlp/lidong1/data/llm_debug/fineweb-1BT.json`）
+  - 数据量足够支撑 10K 步训练
+
+### 4.3 数据加载流程（`llm.data.data_loader.DataLoader`）
+
+项目使用高性能 DataLoader（`data_loader.py`），支持：
+1. **多数据集加权混合：** 基于 `data_weight` 按比例采样
+2. **多进程预取：** `PrefetchIterator` 异步加载
+3. **FFD 序列打包：** `pack_data_for_batch` 将多条短序列打包到 `max_seq_len`
+4. **断点续训：** 完整的 `state_dict` / `load_state_dict` 支持
+
+```python
+# DataLoader 初始化（nnscaler_train.py 第250-273行）
+loader = DataLoader(
+    args=DataLoaderArgs(**data_args),
+    seed=42,
+    shuffle=True,
+    prefetch=True,
+    num_shards=world_size,   # 按 GPU 数分片
+    shard_id=rank,
+    device='cuda'
+)
+```
+
+### 4.4 Batch 格式
+```python
+# DataLoader 输出的 batch 结构（data_loader.py collate 函数）
+batch = {
+    'tokens': torch.Tensor,           # 输入 token [batch*seq_len]
+    'targets': torch.Tensor,          # 目标 token（右移1位，非 loss 位置填充 pad_id）
+    'context': {
+        'cu_seqlens_q': torch.Tensor, # 累积序列长度 [num_seqs+1]
+        'cu_seqlens_k': torch.Tensor, # 累积键序列长度
+        'max_seqlen_q': int,          # 最大查询序列长度
+        'max_seqlen_k': int,          # 最大键序列长度
+        'positions': torch.Tensor,    # RoPE 位置编码索引
+    },
+    'loss_mask': torch.Tensor,        # 损失计算 mask（bool）
+    'loss_index': torch.Tensor,       # 数据来源索引（多数据集场景）
+    'tag_index': torch.Tensor,        # 标签索引（balance loss 分域）
+    'dataset_length': int,            # 数据集数量
+    'tag_length': int,                # 标签种类数量
+}
+```
+
+### 4.5 选择真实数据的理由
+- **实验有效性:** 合成随机数据无法反映量化对真实信号传播的影响
+- **损失可解释性:** 真实数据的 loss 下降具有实际意义，可转换为 BPB（bits per byte）
+- **对比公平性:** 基线与 NVFP4 量化使用完全相同的数据顺序（相同 seed）
+- **项目一致性:** 使用与项目其他实验相同的数据流水线
+
+---
+
+## 5. NVFP4量化配置
+
+> **参考实现:** `/home/yingbohao/Model-Optimizer`（NVIDIA TensorRT Model Optimizer）
+> 本节基于 Model-Optimizer 的实际源码分析，描述 NVFP4 伪量化的完整实现细节。
+
+### 5.1 NVFP4 三级量化体系
+
+NVFP4 使用三级量化层次结构，实现高效的 4-bit 伪量化：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    NVFP4 三级量化体系                             │
+├─────────────────────────────────────────────────────────────────┤
+│ Level 3: Global Scale (FP32)                                    │
+│   global_scale = global_amax / (6.0 × 448.0)                   │
+│   → 单个标量，覆盖整个张量                                       │
+│                                                                 │
+│ Level 2: Per-Block Scale (FP8 E4M3)                             │
+│   block_scale = block_amax / 6.0                                │
+│   block_scale_fp8 = FP8_quantize(block_scale / global_scale)    │
+│                     × global_scale                              │
+│   → 每 16 个元素共享一个 FP8 尺度因子                             │
+│                                                                 │
+│ Level 1: Values (FP4 E2M1)                                      │
+│   normalized = x / block_scale_fp8                              │
+│   quantized = round_to_nearest_fp4(normalized)                  │
+│   → 每个元素量化到 4-bit E2M1 格式                               │
+│                                                                 │
+│ Fake Quant Output = quantized × block_scale_fp8                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**关键常数:**
+- `6.0` — FP4 E2M1 最大可表示值
+- `448.0` — FP8 E4M3 最大可表示值
+- `block_size = 16` — 每个量化块包含 16 个元素
+
+### 5.2 FP4 E2M1 值表（16个量化级别）
+
+```python
+# 8个正值 + 8个对应负值 = 16个量化级别
+FP4_E2M1_VALUES = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]  # 正值
+# 对应的量化边界（用于最近值舍入）：
+FP4_E2M1_BOUNDS = [0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0]
+
+# Triton 内核中的量化逻辑（fp4_kernel.py:214-239）：
+# abs_scaled = |x| / block_scale
+# q_val = nearest_fp4(abs_scaled):
+#   abs_scaled ≤ 0.25  → 0.0
+#   0.25 < abs_scaled < 0.75  → 0.5
+#   0.75 ≤ abs_scaled ≤ 1.25  → 1.0
+#   1.25 < abs_scaled < 1.75  → 1.5
+#   1.75 ≤ abs_scaled ≤ 2.5   → 2.0
+#   2.5  < abs_scaled < 3.5   → 3.0
+#   3.5  ≤ abs_scaled ≤ 5.0   → 4.0
+#   abs_scaled > 5.0           → 6.0（饱和）
+# output = sign(x) × q_val × block_scale
+```
+
+### 5.3 量化范围
+
+本实验支持两种 NVFP4 量化范围，通过 `nvfp4_mode` 参数控制：
+
+#### 模式 1: MLP-Only（`nvfp4_mode=1`）
+
+仅对 FFN（MLP）层做 NVFP4 伪量化，对应 Model-Optimizer 的 `NVFP4_MLP_ONLY_CFG`：
+
+```python
+# Model-Optimizer 中的配置（config.py）：
+NVFP4_MLP_ONLY_CFG = {
+    "quant_cfg": {
+        # 仅匹配 MLP 层内的量化器（fnmatch 模式匹配）
+        "*mlp*weight_quantizer": {
+            "num_bits": (2, 1),          # E2M1 = FP4 格式
+            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+            #               ↑ block=16   ↑ 动态 amax       ↑ E4M3 = FP8 尺度
+            "enable": True,
+            "pass_through_bwd": True,    # 反向传播使用纯 STE
+        },
+        "*mlp*input_quantizer": {
+            "num_bits": (2, 1),
+            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+            "enable": True,
+            "pass_through_bwd": True,
+        },
+        # 所有非 MLP 的量化器保持禁用
+        "*lm_head*": {"enable": False},
+        "*router*": {"enable": False},
+        # ... 其余层全部禁用
+    },
+    "algorithm": "max",
+}
+```
+
+**模式匹配机制:** Model-Optimizer 使用 `fnmatch.fnmatch(module_name, pattern)` 进行层名匹配。
+在 llm-train 项目中，FFN 层的命名为：
+```
+# llm-train 中 FFN 层的 named_modules 路径：
+layers.0.mlp.up_proj      → ✅ 匹配 *mlp*（up 投影）
+layers.0.mlp.down_proj    → ✅ 匹配 *mlp*（down 投影）
+layers.0.mlp.gate_proj    → ✅ 匹配 *mlp*（gate 投影，SwiGLU）
+layers.0.self_attn.q_proj → ❌ 不匹配（注意力层，不量化）
+layers.0.self_attn.o_proj → ❌ 不匹配（注意力层，不量化）
+output                    → ❌ 不匹配（LM head，不量化）
+```
+
+#### 模式 2: FFN + QKVO 全量化（`nvfp4_mode=2`）
+
+在模式 1 的基础上，额外对注意力层的 Q/K/V/O 投影也做 NVFP4 伪量化：
+
+```
+# nvfp4_mode=2 时的量化层（在模式 1 基础上新增）：
+layers.0.self_attn.q_proj → ✅ 量化（Q 投影，权重+输入激活）
+layers.0.self_attn.k_proj → ✅ 量化（K 投影，权重+输入激活）
+layers.0.self_attn.v_proj → ✅ 量化（V 投影，权重+输入激活）
+layers.0.self_attn.o_proj → ✅ 量化（O 投影，权重+输入激活）
+layers.0.self_attn.gate_proj → ✅ 量化（Gated Attention 的 gate 投影，仅 GatedAttn 模型）
+layers.0.self_attn.lambda_proj → ❌ 不量化（Differential Attention 的 lambda 投影，输出维度太小）
+output                    → ❌ 不匹配（LM head，不量化）
+```
+
+**设计说明：**
+- `lambda_proj` 不量化：其输出维度仅为 head 数（16），量化意义不大且可能影响 diff attention 的精度
+- Q/K/V 共享同一份输入激活的 fake quant（`x_fq = nvfp4_fake_quant(x)`），避免重复量化
+- O projection 在 attention 输出（经过 rearrange/gated attention）后做 fake quant
+
+#### 模式 3: MXFP4(W4) + MXFP8(A8) 全量化（`nvfp4_mode=3`）
+
+使用 OCP MX 格式（Blackwell W4A8 硬件加速路径），与 mode=2 相同的量化位置（FFN + QKVO），但采用不同的量化格式：
+
+**与 NVFP4 (mode=1/2) 的关键区别：**
+
+| | NVFP4 (mode=1/2) | MXFP4 weight (mode=3) | MXFP8 activation (mode=3) |
+|---|---|---|---|
+| 元素格式 | FP4 E2M1 | FP4 E2M1 | FP8 E4M3 |
+| Block size | 16 | **32** | **32** |
+| Scale 格式 | E4M3 (FP8) | **E8M0 (2^n only)** | **E8M0 (2^n only)** |
+| 二级 scale | 有 (per-tensor FP32) | **无** | **无** |
+| 量化等级数 | 16 (8正+8负) | 16 (8正+8负) | 448级 (FP8 E4M3) |
+
+**E8M0 scale 格式：**
+- 8 exponent bits, 0 mantissa bits → 只能表示 2 的幂次：..., 0.25, 0.5, 1.0, 2.0, 4.0, ...
+- 量化方式：`scale_e8m0 = 2^ceil(log2(amax / element_max))`
+- 无二级 scale 量化（NVFP4 有 per-tensor FP32 二级 scale）
+
+**量化层（与 mode=2 完全相同的位置，不同的量化函数）：**
+```
+# nvfp4_mode=3 时，weight 用 mxfp4_fake_quant, activation 用 mxfp8_fake_quant：
+layers.0.mlp.up_proj      → ✅ 权重 MXFP4 + 输入激活 MXFP8
+layers.0.mlp.down_proj    → ✅ 权重 MXFP4 + 中间激活 MXFP8
+layers.0.mlp.gate_proj    → ✅ 权重 MXFP4 + 输入激活 MXFP8
+layers.0.self_attn.q_proj → ✅ 权重 MXFP4 + 输入激活 MXFP8
+layers.0.self_attn.k_proj → ✅ 权重 MXFP4 + 输入激活 MXFP8
+layers.0.self_attn.v_proj → ✅ 权重 MXFP4 + 输入激活 MXFP8
+layers.0.self_attn.o_proj → ✅ 权重 MXFP4 + 输出激活 MXFP8
+layers.0.self_attn.gate_proj → ✅ 权重 MXFP4 + 输入激活 MXFP8（仅 GatedAttn 模型）
+layers.0.self_attn.lambda_proj → ❌ 不量化
+output                    → ❌ 不量化（LM head）
+```
+
+**实现文件：** `llm/kernel/mxfp_quant.py`（MXFP4/MXFP8 fake quant 核心实现）
+
+### 5.4 伪量化前向流程（Fake Quantization Forward）
+
+在训练的前向传播中，各层的计算流变为：
+
+#### FFN 层（`nvfp4_mode >= 1`）
+
+```python
+# 原始 FeedForwardNetwork.forward（无量化）：
+def forward(self, x):
+    return self.down_proj(swiglu(self.up_proj(x), self.gate_proj(x)))
+
+# 加入 NVFP4 伪量化后的等效流程：
+def forward_with_nvfp4(self, x):
+    # 1. 对输入激活做 NVFP4 伪量化（W4A4 的 A4 部分）
+    x_fq = nvfp4_fake_quant(x)           # 量化+反量化，引入量化噪声
+
+    # 2. 对权重做 NVFP4 伪量化（W4A4 的 W4 部分）
+    up_w_fq = nvfp4_fake_quant(self.up_proj.weight)
+    gate_w_fq = nvfp4_fake_quant(self.gate_proj.weight)
+
+    # 3. 使用伪量化后的权重和激活计算
+    up = F.linear(x_fq, up_w_fq)
+    gate = F.linear(x_fq, gate_w_fq)
+    intermediate = swiglu(up, gate)
+
+    # 4. 中间激活也做伪量化
+    inter_fq = nvfp4_fake_quant(intermediate)
+    down_w_fq = nvfp4_fake_quant(self.down_proj.weight)
+    return F.linear(inter_fq, down_w_fq)
+```
+
+#### FFN 层 — MXFP4(W4)+MXFP8(A8)（`nvfp4_mode == 3`）
+
+```python
+# 加入 MXFP4+MXFP8 伪量化后的等效流程（OCP MX 格式）：
+def forward_with_mxfp(self, x):
+    # 1. 对输入激活做 MXFP8 伪量化（W4A8 的 A8 部分，block=32, E8M0 scale）
+    x_fq = mxfp8_fake_quant(x)
+
+    # 2. 对权重做 MXFP4 伪量化（W4A8 的 W4 部分，block=32, E8M0 scale）
+    up = mix_precision_linear(x_fq, mxfp4_fake_quant(self.up_proj.weight))
+    gate = mix_precision_linear(x_fq, mxfp4_fake_quant(self.gate_proj.weight))
+    intermediate = swiglu(up, gate)
+
+    # 3. 中间激活做 MXFP8 伪量化
+    inter_fq = mxfp8_fake_quant(intermediate)
+    return mix_precision_linear(inter_fq, mxfp4_fake_quant(self.down_proj.weight))
+```
+
+#### Attention QKVO 层（`nvfp4_mode >= 2`，新增）
+
+```python
+# 原始 Attention.forward 中 QKVO 投影（无量化）：
+def forward(self, x, ...):
+    xq = self.q_proj(x)       # MixPrecisionLinear
+    xk = self.k_proj(x)
+    xv = self.v_proj(x)
+    # ... attention computation ...
+    output = self.o_proj(rearranged_output)
+
+# nvfp4_mode >= 2 时的等效流程：
+def forward_with_nvfp4_qkvo(self, x, ...):
+    # 1. Q/K/V 共享同一份输入 fake quant（避免重复量化）
+    x_fq = nvfp4_fake_quant(x)
+    xq = mix_precision_linear(x_fq, nvfp4_fake_quant(self.q_proj.weight))
+    xk = mix_precision_linear(x_fq, nvfp4_fake_quant(self.k_proj.weight))
+    xv = mix_precision_linear(x_fq, nvfp4_fake_quant(self.v_proj.weight))
+
+    # 2. Gated Attention 的 gate_proj 也做量化（如果存在）
+    if self.gate_proj is not None:
+        gate = mix_precision_linear(nvfp4_fake_quant(x), nvfp4_fake_quant(self.gate_proj.weight))
+
+    # 3. ... attention computation (RoPE, flash_attn, etc.) 不受影响 ...
+
+    # 4. O projection 量化
+    output = mix_precision_linear(nvfp4_fake_quant(attn_output), nvfp4_fake_quant(self.o_proj.weight))
+```
+
+#### Attention QKVO 层 — MXFP4(W4)+MXFP8(A8)（`nvfp4_mode == 3`）
+
+```python
+# nvfp4_mode == 3 时的等效流程（OCP MX 格式）：
+def forward_with_mxfp_qkvo(self, x, ...):
+    # 1. Q/K/V 共享同一份输入 MXFP8 fake quant
+    x_fq = mxfp8_fake_quant(x)
+    xq = mix_precision_linear(x_fq, mxfp4_fake_quant(self.q_proj.weight))
+    xk = mix_precision_linear(x_fq, mxfp4_fake_quant(self.k_proj.weight))
+    xv = mix_precision_linear(x_fq, mxfp4_fake_quant(self.v_proj.weight))
+
+    # 2. Gated Attention 的 gate_proj 也做量化（如果存在）
+    if self.gate_proj is not None:
+        gate = mix_precision_linear(mxfp8_fake_quant(x), mxfp4_fake_quant(self.gate_proj.weight))
+
+    # 3. ... attention computation (RoPE, flash_attn, etc.) 不受影响 ...
+
+    # 4. O projection 量化
+    output = mix_precision_linear(mxfp8_fake_quant(attn_output), mxfp4_fake_quant(self.o_proj.weight))
+```
+
+**注意：** `lambda_proj`（Differential Attention）不做量化，因为其输出维度仅为 head 数（16），太小没有量化收益。
+
+**量化点对照表（对标 MoE FP8 已有实现）：**
+
+| 量化点 | MoE FP8（kernel/quant.py 已有） | Dense FFN NVFP4 mode=1 | FFN+QKVO NVFP4 mode=2 | MXFP4+MXFP8 mode=3 |
+|--------|-------------------------------|--------------------------|-------------------------------|-------------------------------|
+| FFN 输入激活 | `act_quant_fp8` before dispatch | `nvfp4_fake_quant(x)` before up/gate | 同 mode=1 | `mxfp8_fake_quant(x)` (A8) |
+| W1/W3 权重 | `weight_quant_fp8_(w13)` | `nvfp4_fake_quant(up/gate_proj.weight)` | 同 mode=1 | `mxfp4_fake_quant(weight)` (W4) |
+| SwiGLU 后中间激活 | `fused_silu` 内嵌量化 | `nvfp4_fake_quant(intermediate)` | 同 mode=1 | `mxfp8_fake_quant(intermediate)` (A8) |
+| W2 权重 | `weight_quant_fp8_(w2)` | `nvfp4_fake_quant(down_proj.weight)` | 同 mode=1 | `mxfp4_fake_quant(weight)` (W4) |
+| Attention 输入激活 | — | — | `nvfp4_fake_quant(x)` before Q/K/V | `mxfp8_fake_quant(x)` (A8) |
+| Q/K/V 权重 | — | — | `nvfp4_fake_quant(q/k/v_proj.weight)` | `mxfp4_fake_quant(weight)` (W4) |
+| Attention 输出激活 | — | — | `nvfp4_fake_quant(output)` before O proj | `mxfp8_fake_quant(output)` (A8) |
+| O 权重 | — | — | `nvfp4_fake_quant(o_proj.weight)` | `mxfp4_fake_quant(weight)` (W4) |
+| 反向传播 | STE 梯度直通 | STE 梯度直通 | STE 梯度直通 | STE 梯度直通 |
+
+### 5.5 梯度处理：直通估计器（STE）
+
+**反向传播使用纯 STE（`pass_through_bwd=True`）：**
+
+```python
+# Model-Optimizer 的 STE 实现（tensor_quant.py:286-311）
+
+# 方式1: pass_through_bwd=True（本实验使用）
+# → 不保存 inputs/amax，梯度完全直通
+# → ∂L/∂x = ∂L/∂output（恒等映射）
+# → 内存更省（不需保存前向张量）
+
+class StaticBlockwiseFP4FakeQuantFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, amax, global_amax, quantize_block_scales, out_dtype, pass_through_bwd):
+        # pass_through_bwd=True 时不保存任何张量
+        if not pass_through_bwd and amax is not None:
+            ctx.save_for_backward(x, amax)
+        # 调用 Triton 内核做前向伪量化
+        return static_blockwise_fp4_fake_quant(x, amax, global_amax, quantize_block_scales, out_dtype)
+
+    @staticmethod
+    def backward(ctx, grad_outputs):
+        if len(ctx.saved_tensors) == 0:
+            # pass_through_bwd=True: 梯度完全直通
+            return (grad_outputs, None, None, None, None, None)
+        else:
+            # pass_through_bwd=False: 超出 amax 的梯度置零
+            inputs, amax = ctx.saved_tensors
+            return (torch.where(inputs.abs() <= amax, grad_outputs, 0.0), None, None, None, None, None)
+
+# 方式2: pass_through_bwd=False（可选，内存更多但梯度更精确）
+# → ∂L/∂x = ∂L/∂output × 𝟙(|x| ≤ amax)
+# → 饱和区（|x| > amax）的梯度被置零
+# → 需要额外保存 inputs 和 amax 张量
+```
+
+**为什么 MLP-Only 使用 `pass_through_bwd=True`：**
+- 动态量化格式下，amax 每次前向都重新计算，几乎不存在截断（clipping），因此置零梯度没有意义
+- 纯 STE 节省内存（不需保存前向输入张量）
+- Model-Optimizer 官方文档："For dynamic quantization formats like MXFP4, STE with zeroed outlier gradients is not needed since fake quantization with dynamic amax results in minimal/no clipping"
+
+### 5.6 Train from Scratch vs QAT 的区别
+
+Model-Optimizer 的 NVFP4 实现面向 **已有预训练模型的 QAT（Quantization-Aware Training）**，而本实验是 **train from scratch**，两者有关键区别：
+
+```
+┌──────────────────────────────────┬──────────────────────────────────┐
+│   Model-Optimizer (QAT 微调)      │   本实验 (Train from Scratch)     │
+├──────────────────────────────────┼──────────────────────────────────┤
+│ 1. 加载预训练 checkpoint          │ 1. 随机初始化权重                  │
+│ 2. 插入量化器（模块替换）          │ 2. 模型定义时直接内建伪量化         │
+│ 3. 校准（calibration forward）    │ 3. 无需校准，动态 amax 即可        │
+│ 4. QAT 微调（少量步数，小 lr）     │ 4. 全程训练（10K步，量化从头开始）   │
+│                                  │                                  │
+│ 需要先全精度训练/微调（Step 1）     │ 不需要，从 step 0 直接带量化训练    │
+│ → NVIDIA 官方："跳过 Step 1 会     │ → 随机权重没有已学到的信息需要保护   │
+│   导致精度变差"                   │ → BitNet 实验证明 warmup 无改善     │
+│                                  │                                  │
+│ 需要 Triton 高性能内核            │ PyTorch 原生实现即可               │
+│ 需要 NVFP4StaticQuantizer        │ 简单的 autograd Function          │
+│ 需要模块替换 + fnmatch 匹配       │ 直接在 FFN forward 中插入          │
+│ 需要校准数据 + 全局 amax 统计     │ 动态 per-block amax，无需预统计    │
+└──────────────────────────────────┴──────────────────────────────────┘
+```
+
+**简化要点（仅简化工程框架，量化算法本身完整匹配 NVIDIA NVFP4 规范）：**
+- **从 step 0 开始量化，不需要预热不量化阶段：** 从头训练的模型权重是随机初始化的，不存在"已学到的信息被量化噪声破坏"的问题。HuggingFace BitNet 实验在 SmolLM 135M 上验证了从头训练时"有量化 warmup"vs"无量化 warmup"loss 曲线几乎一致。NVIDIA Model-Optimizer 推荐的"先全精度再 QAT"仅适用于已有 checkpoint 的微调场景。
+- **无需校准步骤：** 动态 amax（每次前向重新计算 per-block 最大值），不需要提前跑 calibration forward
+- **无需模块替换框架：** 不需要 Model-Optimizer 的 `replace_quant_module` + `set_quantizer_by_cfg` 管线
+- **PyTorch 原生实现：** 用 `torch.compile` + `torch.float8_e4m3fn` 原生 cast 即可，不需要 Triton 内核
+- **量化算法完全一致：** 两级量化（FP4 E2M1 元素 + FP8 E4M3 block scale）完整匹配 NVIDIA NVFP4_DEFAULT_CFG 规范，`torch.float8_e4m3fn` 提供硬件级精确的 FP8 舍入
+
+### 5.7 在 llm-train 中的集成方案
+
+NVFP4 伪量化已在 `llm/kernel/nvfp4_quant.py` 中实现，采用纯 PyTorch 实现，完整匹配 NVIDIA NVFP4 两级量化规范：
+
+```python
+# === 已实现的代码模块 ===
+
+# 1. kernel/nvfp4_quant.py — NVFP4 两级伪量化（纯 PyTorch 实现）
+#    Level 1: 元素量化到 FP4 E2M1（block_size=16, searchsorted 最近值映射）
+#    Level 2: Per-block scale 量化到 FP8 E4M3（torch.float8_e4m3fn 原生 cast）
+#    STE 反向传播（梯度完全直通，不保存前向张量）
+
+# 2. arch/config.py — nvfp4_mode: int = 0
+#    0: 禁用, 1: FFN NVFP4 W4A4, 2: FFN+QKVO NVFP4 W4A4,
+#    3: FFN+QKVO MXFP4(W4)+MXFP8(A8) (OCP MX, Blackwell W4A8)
+
+# 3. arch/ffn.py — nvfp4_mode >= 1 时对 FFN 的 up/gate/down_proj 做 W4A4 伪量化
+#                  nvfp4_mode == 3 时改用 mxfp4(weight) + mxfp8(activation)
+
+# 4. arch/attention.py — nvfp4_mode >= 2 时对 Q/K/V/O 投影做 W4A4 伪量化
+#                        nvfp4_mode == 3 时改用 mxfp4(weight) + mxfp8(activation)
+
+# 5. arch/model.py — 将 args.nvfp4_mode 传递到各层
+```
+
+**核心实现：FP8 E4M3 scale 量化**
+
+```python
+# kernel/nvfp4_quant.py 中的两级量化流程：
+
+@torch.compile
+def _fp8_e4m3_fake_quant(x, amax):
+    """将 per-block scale 量化到 FP8 E4M3 格式。"""
+    fp8_scale = (448.0 / amax.clamp(min=1e-12))       # 映射到 FP8 动态范围
+    x_scaled = x * fp8_scale                            # Scale up
+    x_fp8 = x_scaled.to(torch.float8_e4m3fn).float()   # FP8 cast: 量化+反量化
+    return x_fp8 / fp8_scale                            # Scale down
+
+@torch.compile
+def _nvfp4_fake_quant_impl(x, fp4_values, fp4_bounds):
+    x_flat = x.reshape(-1, 16).float()
+
+    # Per-block scale (FP32)
+    amax = x_flat.abs().amax(dim=-1, keepdim=True)
+    scale = (amax / 6.0).clamp(min=1e-12)
+
+    # Level 2: Scale → FP8 E4M3 fake quant（关键！引入 ~2-6% 的 scale 舍入误差）
+    global_amax = scale.amax()
+    scale = _fp8_e4m3_fake_quant(scale, global_amax)
+
+    # Level 1: Elements → FP4 E2M1 fake quant
+    abs_scaled = x_flat.abs() / scale
+    indices = torch.searchsorted(fp4_bounds, abs_scaled)
+    q_val = fp4_values[indices]
+
+    return (x_flat.sign() * q_val * scale).to(x.dtype).reshape(x.shape)
+```
+
+> **FP8 E4M3 scale 量化的影响：** 3 位尾数意味着相邻可表示值之间有 ~6.25% 的间距。
+> 测试表明 per-block scale 的 FP8 量化平均引入 ~2.3% 相对误差，最大 ~5.3%，
+> 75% 的 block 有 >1% 的 scale 误差。这个误差会系统性地叠加在 FP4 元素量化误差之上。
+
+**核心实现：MXFP4/MXFP8 OCP MX 格式量化（mode=3，`kernel/mxfp_quant.py`）**
+
+```python
+# kernel/mxfp_quant.py 中的 E8M0 scale 量化和 MXFP4/MXFP8 量化流程：
+
+MXFP_BLOCK_SIZE = 32  # OCP MX 标准 block size
+
+@torch.compile
+def _e8m0_quantize(scale):
+    """E8M0 scale: snap to ceil power of 2 (matches modelopt)."""
+    return torch.exp2(torch.ceil(torch.log2(scale.clamp(min=1e-12))))
+
+@torch.compile
+def _mxfp4_fake_quant_impl(x, fp4_values, fp4_bounds):
+    """MXFP4 (weight): FP4 E2M1 elements, block=32, E8M0 scale."""
+    x_flat = x.reshape(-1, 32).float()
+    amax = x_flat.abs().amax(dim=-1, keepdim=True)
+    scale = _e8m0_quantize((amax / 6.0).clamp(min=1e-12))  # 单级 E8M0 scale（无二级量化）
+    abs_scaled = x_flat.abs() / scale
+    indices = torch.searchsorted(fp4_bounds, abs_scaled)
+    q_val = fp4_values[indices]
+    return (x_flat.sign() * q_val * scale).to(x.dtype).reshape(x.shape)
+
+@torch.compile
+def _mxfp8_fake_quant_impl(x):
+    """MXFP8 (activation): FP8 E4M3 elements, block=32, E8M0 scale."""
+    x_flat = x.reshape(-1, 32).float()
+    amax = x_flat.abs().amax(dim=-1, keepdim=True)
+    scale = _e8m0_quantize((amax / 448.0).clamp(min=1e-12))  # 单级 E8M0 scale
+    x_fp8 = (x_flat / scale).to(torch.float8_e4m3fn).to(torch.float32)
+    return (x_fp8 * scale).to(x.dtype).reshape(x.shape)
+```
+
+> **MXFP vs NVFP4 的核心差异：** NVFP4 使用两级量化（FP8 E4M3 block scale + FP32 per-tensor global scale），
+> 引入 ~2-6% 的 scale 舍入误差。MXFP 使用单级 E8M0 scale（power-of-2 only），scale 精度更粗糙（最近 2^n），
+> 但没有二级量化的累积误差，且与 Blackwell tensor core 的 W4A8 硬件路径完全对齐。
+> MXFP8 activation（FP8 E4M3, 448 级）比 NVFP4 activation（FP4 E2M1, 16 级）精度高得多，
+> 使得 W4A8 整体量化噪声可能比 W4A4 更低。
+
+**关键设计决策：**
+- **完整两级量化**（FP4 E2M1 元素 + FP8 E4M3 block scale，匹配 NVIDIA NVFP4_DEFAULT_CFG）
+- **纯 PyTorch 实现**（`torch.compile` 优化 + `torch.float8_e4m3fn` 原生 cast，不依赖 Triton 内核）
+- **block_size = 16**（NVFP4 标准，不同于 FP8 的 128）
+- **模式 1: 仅量化 FFN**（up_proj, gate_proj, down_proj 的权重和输入激活）
+- **模式 2: FFN + QKVO 全量化**（在模式 1 基础上，额外量化 q_proj, k_proj, v_proj, o_proj 及 gated attention 的 gate_proj）
+- **模式 3: MXFP4(W4)+MXFP8(A8) 全量化**（OCP MX 格式，block=32, E8M0 scale，Blackwell W4A8 硬件加速路径）
+- **不量化 LM head 和 lambda_proj**（前者影响输出精度，后者维度太小无收益）
+- **STE 反向传播**（梯度完全直通，不保存前向张量）
+- **动态 amax**（每次前向重新计算 per-block amax，无需校准步骤）
+- **从第一步开始量化**（train from scratch，无需预热或渐进量化）
+
+---
+
+## 6. 硬件和并行配置
+
+### 6.1 硬件环境
+```yaml
+hardware_specs:
+  gpu_model: "NVIDIA B200"        # GPU型号
+  gpu_count: 4                    # GPU数量
+  gpu_memory: "180GB per GPU"     # 单卡显存（183359 MiB）
+  total_memory: "720GB"           # 总显存
+  compute_capability: "10.0"      # Blackwell 架构
+  cuda_version: "13.0"            # CUDA 版本
+  driver_version: "580.95.05"     # 驱动版本
+  tdp: "1000W per GPU"            # 功耗上限
+```
+
+### 6.2 并行策略（基于 nnscaler 分布式训练）
+
+```python
+# 参考 nnscaler_train.py 和项目 YAML 的分布式配置
+parallel_config = {
+    'framework': 'nnscaler',             # 使用 nnscaler 框架
+    'plan_ngpus': 1,                     # 每个 scale unit 大小（0.7B 模型单卡即可）
+    'runtime_ngpus': 4,                  # 运行时 GPU 数量
+    'zero_group_size': 4,                # ZeRO 分组大小（=runtime_ngpus，全组通信）
+    'backend': 'nccl',                   # 通信后端
+    'use_async_reducer': True,           # 异步梯度聚合（与项目 YAML 一致）
+    'batch_size_per_gpu': 2,             # 每 GPU 批次大小（与项目 YOCO-3B 一致）
+    'update_freq': 2,                    # 梯度累积步数（与项目 YOCO-3B 一致）
+    'effective_batch_size': 16,          # 有效批次大小 (4 GPU × 2 batch × 2 accum)
+}
+```
+
+### 6.3 内存使用分析
+0.7B 模型（命名 0.4B）+ 180GB 显存，内存非常充裕：
+
+```python
+memory_breakdown_per_gpu = {
+    'model_parameters': '~2.8GB',      # 0.7B × 4bytes (fp32 存储)
+    'optimizer_states': '~5.6GB',      # AdamW: 2 × 0.7B × 4bytes (m + v, fp32)
+    'gradients': '~2.8GB',            # fp32 梯度
+    'activations': '~2-4GB',          # bf16 前向激活，取决于 seq_len 和 batch_size
+    'quantization_overhead': '~0.5GB', # 量化索引和尺度（实验组）
+    'system_reserved': '~2GB',        # CUDA context + 系统预留
+    'total_usage': '~16-18GB per GPU', # 总使用量
+    'available_headroom': '~162GB',   # 180GB - 18GB，极大余量
+}
+```
+
+> **注意：** 180GB 显存远超 0.7B 模型的需求（混合精度训练每卡仅约 16-18GB）。如果训练速度是瓶颈，可以考虑：
+> - 增大 `batch_size`（如 4 或 8）以提升 GPU 利用率
+> - 增大 `max_seq_len`（如 8192）以学习更长距离依赖
+> - 当前配置（batch_size=2, seq_len=4096）是保守选择，优先保证与项目一致性
+
+---
+
+## 7. 项目原生组件使用
+
+### 7.1 学习率调度器
+**组件:** `llm.warmup_scheduler.WarmupCosineAnnealingLR`
+
+```python
+from llm.warmup_scheduler import WarmupCosineAnnealingLR
+
+scheduler = WarmupCosineAnnealingLR(
+    optimizer=optimizer,
+    warmup_steps=2000,      # 线性预热步数
+    T_max=10000,            # 总训练步数
+    eta_min=3e-5            # 最小学习率（余弦衰减终点）
+)
+```
+**选择原因:**
+- 项目原生实现，已在多个大规模实验中验证
+- 线性预热 + 余弦衰减，10K 步短实验尾部 loss 平滑，便于对比
+- 通过 `LRSchedulerConfig` 与 nnscaler 训练流程无缝集成
+
+### 7.2 模型定义
+**组件:** `llm.arch.model.Model`
+
+```python
+from llm.arch.model import Model
+from llm.arch.config import ModelArgs
+
+model = Model(ModelArgs(**model_args))
+```
+**架构层次:**
+- `Model` → `Block` × n_layers → `Attention` + `FeedForwardNetwork`
+- `Attention` 支持 `gated_attention` 和 `diff_attention` 开关
+- `Block.forward` 返回 `(output, routing_map, expert_prob)`
+
+### 7.3 配置管理
+**组件:** `llm.config`
+
+```python
+from llm.config import model_args, data_args, training_args
+
+# 获取预定义配置
+model_config = model_args["Base-0.4B"]
+data_config = data_args["nvfp4_fineweb"]
+train_config = training_args["nvfp4_experiment"]
+```
+**命令行调用方式（对齐项目 YAML 风格）:**
+```bash
+torchrun --nproc_per_node=4 llm/nnscaler_train.py \
+    --model Base-0.4B \
+    --data nvfp4_fineweb \
+    --hyperparams nvfp4_experiment \
+    --batch_size 2 \
+    --update_freq 2 \
+    --max_seq_len 4096 \
+    --num_workers 2 \
+    --seed 42 \
+    --plan_ngpus 1 \
+    --runtime_ngpus 4 \
+    --zero_group_size 4 \
+    --precision fp32 \
+    --xentropy_recompute \
+    --use_async_reducer \
+    --disable_shared_param_constraint \
+    --gpu_mem_constraint 135 \
+    --learning_rate 6e-4 \
+    --min_lr 3e-5 \
+    --warmup_iters 2000 \
+    --max_updates 10000 \
+    --save_path /path/to/checkpoints/baseline/Base-0.4B \
+    --save_interval 1000 \
+    --wandb_project nvfp4_experiment \
+    --name Base-0.4B-baseline
+```
+
+**关于 z_loss 的说明：**
+项目 YAML 中使用 `--z_loss_scale 1e-5`，但 `ModelArgs` 中 `z_loss_start_step` 默认为 10000，即 z_loss 在 step 10000 才开始生效。由于本实验总共 10K 步，z_loss 几乎不起作用。如需启用，需同时传入 `--z_loss_start_step 0`。本实验建议**不传** `--z_loss_scale`，保持默认值 0 即可。
+
+**关于 `--seed 42` 的说明：**
+必须通过 CLI 传入 `--seed 42`，因为 `parse_nnscaler_args` 会将 CLI 参数广播到所有配置对象（ModelArgs、DataLoaderArgs、TrainerArgs）。仅在 TrainerArgs 中设置 `seed=42` 不够——DataLoader 使用的是 `DataLoaderArgs.seed`，其默认值为 1。通过 CLI 传入 `--seed 42` 可确保训练和数据加载都使用相同的随机种子。
+
+### 7.4 损失计算
+**组件:** `llm.kernel.vocab_parallel_cross_entropy.inner_chunk_linear_cross_entropy`
+
+```python
+# BackBone.forward（nnscaler_train.py 第155行）
+losses, z_losses = inner_chunk_linear_cross_entropy(
+    hidden_states, self.model.output.weight, targets,
+    self.xentropy_chunk_size,   # chunk 大小
+    self.xentropy_recompute     # 是否重计算以节省内存
+)
+
+# WrapperModel.forward 中的损失聚合：
+loss = torch.sum(losses * loss_mask)          # 主语言模型损失
+z_loss = torch.sum(z_losses * loss_mask)      # Z-loss
+# 最终损失 = lm_loss + z_loss_scale * z_loss
+# 注意：本实验中 z_loss_scale=0（默认值），z_loss 不影响训练
+```
+
+### 7.5 量化实现
+**现有组件:** `llm.kernel.quant`（FP8 fake quantization，仅 MoE）
+
+项目已有 FP8 伪量化实现（`kernel/quant.py`），通过 `fp8_mode` 参数在 MoE 层中启用：
+
+```python
+# 已有的 FP8 量化组件（kernel/quant.py）：
+# - w_fake_fp8 / x_fake_fp8: Triton 内核，block_size=128, scale=max(|block|)/448
+# - weight_quant_fp8_(x): 3D [E,M,N] 权重 FP8 伪量化
+# - ActQuantFP8(torch.autograd.Function): 激活 FP8 伪量化 + STE 反向
+# - act_quant_fp8(x): 便捷接口
+#
+# 集成位置：仅在 MoE 层（kernel/moe_ffn.py, arch/all2all_moe.py）
+#   fp8_mode=0: 禁用（Dense 模型默认）
+#   fp8_mode=1: FP8 伪量化（MoE 训练用）
+#   fp8_mode=2: FP8 真量化
+```
+
+**NVFP4 量化（已实现，`llm/kernel/nvfp4_quant.py`）：**
+
+NVFP4 伪量化已在项目中实现，采用纯 PyTorch 实现，完整匹配 NVIDIA TensorRT-Model-Optimizer 的 NVFP4_DEFAULT_CFG 两级量化规范：
+
+> **与 Model-Optimizer 的关键区别：** Model-Optimizer 面向已有 checkpoint 的 QAT（需要模块替换、校准、Triton 高性能内核）。本实验是 train from scratch，用 PyTorch 原生实现即可，不需要校准步骤，量化从第一步开始。但**量化算法本身完全一致**——包括 FP4 E2M1 元素量化和 FP8 E4M3 block scale 两级量化。
+
+```python
+# === 已实现模块: kernel/nvfp4_quant.py ===
+# 完整匹配 NVIDIA NVFP4_DEFAULT_CFG: num_bits=(2,1), scale_bits=(4,3), block_size=16
+
+import torch
+
+_FP4_VALUES = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]  # FP4 E2M1 量化值
+_FP4_BOUNDS = [0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0]     # 最近值舍入边界
+_FP4_MAX = 6.0       # FP4 E2M1 最大值
+_FP8_E4M3_MAX = 448.0 # FP8 E4M3 最大值
+
+@torch.compile
+def _fp8_e4m3_fake_quant(x, amax):
+    """Level 2: Per-block scale → FP8 E4M3 fake quant"""
+    fp8_scale = (_FP8_E4M3_MAX / amax.clamp(min=1e-12))
+    x_scaled = x * fp8_scale
+    x_fp8 = x_scaled.to(torch.float8_e4m3fn).to(torch.float32)  # 硬件级 FP8 cast
+    return x_fp8 / fp8_scale
+
+@torch.compile
+def _nvfp4_fake_quant_impl(x, fp4_values, fp4_bounds):
+    """NVFP4 两级伪量化核心实现"""
+    x_flat = x.reshape(-1, 16).float()
+
+    # Per-block scale
+    amax = x_flat.abs().amax(dim=-1, keepdim=True)
+    scale = (amax / 6.0).clamp(min=1e-12)
+
+    # Level 2: Scale 量化到 FP8 E4M3（~2-6% 相对误差）
+    global_amax = scale.amax()
+    scale = _fp8_e4m3_fake_quant(scale, global_amax)
+
+    # Level 1: 元素量化到 FP4 E2M1
+    abs_scaled = x_flat.abs() / scale
+    indices = torch.searchsorted(fp4_bounds, abs_scaled)
+    q_val = fp4_values[indices]
+    return (x_flat.sign() * q_val * scale).to(x.dtype).reshape(x.shape)
+
+class NvFP4FakeQuant(torch.autograd.Function):
+    """NVFP4 两级伪量化 + STE 反向传播"""
+    @staticmethod
+    def forward(ctx, x):
+        fp4_values, fp4_bounds = _get_fp4_tables(x.device)
+        return _nvfp4_fake_quant_impl(x, fp4_values, fp4_bounds)
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output  # 纯 STE：梯度直通
+
+def nvfp4_fake_quant(x):
+    """对张量做 NVFP4 两级伪量化（FP4 E2M1 值 + FP8 E4M3 scale）"""
+    return NvFP4FakeQuant.apply(x)
+```
+
+**关键差异对比（FP8 已有 vs NVFP4 新增）：**
+
+| 属性 | FP8（kernel/quant.py） | NVFP4（kernel/nvfp4_quant.py） | MXFP4+MXFP8（kernel/mxfp_quant.py） |
+|------|----------------------|----------------|----------------|
+| 格式 | E4M3, 8-bit | E2M1, 4-bit（元素）+ E4M3, 8-bit（scale） | W: E2M1 4-bit + A: E4M3 8-bit（E8M0 scale） |
+| block_size | 128 | 16 | 32 |
+| 最大可表示值 | 448.0 | 6.0（元素）/ 448.0（scale） | W: 6.0 / A: 448.0 |
+| 实现方式 | Triton 内核 | 纯 PyTorch（torch.compile + torch.float8_e4m3fn） | 纯 PyTorch（torch.compile + E8M0 + torch.float8_e4m3fn） |
+| scale 格式 | FP32 | FP8 E4M3（两级量化） | E8M0（单级，power-of-2 only） |
+| 作用范围 | MoE 层 | Dense FFN 层（mode=1）/ FFN+QKVO（mode=2） | FFN+QKVO（mode=3） |
+| 梯度 | STE 直通 | STE 直通 | STE 直通 |
+| 训练方式 | 已有 checkpoint + fp8_mode | Train from scratch + nvfp4_mode | Train from scratch + nvfp4_mode=3 |
+| 目标硬件 | — | NVIDIA FP4 tensor core | Blackwell W4A8 tensor core (OCP MX) |
+
+---
+
+## 8. 实验执行流程
+
+### 8.1 训练启动（torchrun + nnscaler）
+
+```bash
+# 环境准备
+export PYTHONPATH="/home/yingbohao/llm-train:$PYTHONPATH"
+
+# ======== 基线训练（标准混合精度，4个模型） ========
+for MODEL in Base-0.4B GatedAttn-0.4B DiffAttn-0.4B GatedDiffAttn-0.4B; do
+    torchrun --nproc_per_node=4 llm/nnscaler_train.py \
+        --model $MODEL \
+        --data nvfp4_fineweb \
+        --hyperparams nvfp4_experiment \
+        --batch_size 2 \
+        --update_freq 2 \
+        --max_seq_len 4096 \
+        --num_workers 2 \
+        --seed 42 \
+        --plan_ngpus 1 \
+        --runtime_ngpus 4 \
+        --zero_group_size 4 \
+        --precision fp32 \
+        --xentropy_recompute \
+        --use_async_reducer \
+        --disable_shared_param_constraint \
+        --gpu_mem_constraint 135 \
+        --learning_rate 6e-4 \
+        --min_lr 3e-5 \
+        --warmup_iters 2000 \
+        --max_updates 10000 \
+        --save_path /path/to/checkpoints/baseline/$MODEL \
+        --save_interval 1000 \
+        --wandb_project nvfp4_baseline \
+        --name $MODEL-baseline
+done
+
+# ======== 量化训练（NVFP4，4个模型） ========
+# 量化训练与基线使用完全相同的配置，仅在 FFN 前向传播中插入 NVFP4 伪量化
+# 实现方式（参考第5节和第7.5节）：
+#   1. 在 arch/config.py 中添加 nvfp4_mode 字段（默认0=禁用，1=FFN伪量化）
+#   2. 在 arch/ffn.py 的 FeedForwardNetwork.forward 中根据 nvfp4_mode 插入伪量化
+#   3. 新增 kernel/nvfp4_quant.py（纯 PyTorch 实现 + STE autograd Function）
+#   4. 通过 CLI 传入 --nvfp4_mode 1 启用
+for MODEL in Base-0.4B GatedAttn-0.4B DiffAttn-0.4B GatedDiffAttn-0.4B; do
+    torchrun --nproc_per_node=4 llm/nnscaler_train.py \
+        --model $MODEL \
+        --data nvfp4_fineweb \
+        --hyperparams nvfp4_experiment \
+        --batch_size 2 \
+        --update_freq 2 \
+        --max_seq_len 4096 \
+        --num_workers 2 \
+        --seed 42 \
+        --plan_ngpus 1 \
+        --runtime_ngpus 4 \
+        --zero_group_size 4 \
+        --precision fp32 \
+        --xentropy_recompute \
+        --use_async_reducer \
+        --disable_shared_param_constraint \
+        --gpu_mem_constraint 135 \
+        --learning_rate 6e-4 \
+        --min_lr 3e-5 \
+        --warmup_iters 2000 \
+        --max_updates 10000 \
+        --nvfp4_mode 1 \
+        --save_path /path/to/checkpoints/nvfp4/$MODEL \
+        --save_interval 1000 \
+        --wandb_project nvfp4_experiment \
+        --name $MODEL-nvfp4
+done
+
+# ======== 全量化训练（NVFP4 FFN+QKVO，4个模型） ========
+# 在模式 1 基础上，额外对注意力层的 Q/K/V/O 投影也做 NVFP4 伪量化
+# 实现方式：
+#   1. arch/attention.py 的 Attention.forward 中根据 nvfp4_mode >= 2 对 QKVO 插入伪量化
+#   2. 通过 CLI 传入 --nvfp4_mode 2 启用
+for MODEL in Base-0.4B GatedAttn-0.4B DiffAttn-0.4B GatedDiffAttn-0.4B; do
+    torchrun --nproc_per_node=4 llm/nnscaler_train.py \
+        --model $MODEL \
+        --data nvfp4_fineweb \
+        --hyperparams nvfp4_experiment \
+        --batch_size 2 \
+        --update_freq 2 \
+        --max_seq_len 4096 \
+        --num_workers 2 \
+        --seed 42 \
+        --plan_ngpus 1 \
+        --runtime_ngpus 4 \
+        --zero_group_size 4 \
+        --precision fp32 \
+        --xentropy_recompute \
+        --use_async_reducer \
+        --disable_shared_param_constraint \
+        --gpu_mem_constraint 135 \
+        --learning_rate 6e-4 \
+        --min_lr 3e-5 \
+        --warmup_iters 2000 \
+        --max_updates 10000 \
+        --nvfp4_mode 2 \
+        --save_path /path/to/checkpoints/nvfp4_full/$MODEL \
+        --save_interval 1000 \
+        --wandb_project nvfp4_experiment \
+        --name $MODEL-nvfp4_full
+done
+
+# ======== MXFP4(W4)+MXFP8(A8) 全量化训练（OCP MX 格式，4个模型） ========
+# 使用 OCP MX 格式的 W4A8 量化，为 Blackwell 推理做 QAT 准备
+# 与 mode=2 相同的量化位置（FFN+QKVO），但用不同的量化格式：
+#   - Weight: MXFP4 (FP4 E2M1, block=32, E8M0 scale)
+#   - Activation: MXFP8 (FP8 E4M3, block=32, E8M0 scale)
+# 实现文件: kernel/mxfp_quant.py
+# 通过 CLI 传入 --nvfp4_mode 3 启用
+# 或使用 run_single.sh: bash scripts/nvfp4_experiment/run_single.sh Base-0.4B mxw4a8
+for MODEL in Base-0.4B GatedAttn-0.4B DiffAttn-0.4B GatedDiffAttn-0.4B; do
+    torchrun --nproc_per_node=4 llm/nnscaler_train.py \
+        --model $MODEL \
+        --data nvfp4_fineweb \
+        --hyperparams nvfp4_experiment \
+        --batch_size 2 \
+        --update_freq 2 \
+        --max_seq_len 4096 \
+        --num_workers 2 \
+        --seed 42 \
+        --plan_ngpus 1 \
+        --runtime_ngpus 4 \
+        --zero_group_size 4 \
+        --precision fp32 \
+        --xentropy_recompute \
+        --use_async_reducer \
+        --disable_shared_param_constraint \
+        --gpu_mem_constraint 135 \
+        --learning_rate 6e-4 \
+        --min_lr 3e-5 \
+        --warmup_iters 2000 \
+        --max_updates 10000 \
+        --nvfp4_mode 3 \
+        --save_path /path/to/checkpoints/mxw4a8/$MODEL \
+        --save_interval 1000 \
+        --wandb_project nvfp4_experiment \
+        --name $MODEL-mxw4a8
+done
+```
+
+### 8.2 训练流水线
+```python
+training_pipeline = {
+    'step_1': 'nnscaler 编译和分布式规划',    # compute_config + pas_autodist
+    'step_2': 'Model 初始化（fp32 权重 + MixPrecisionLinear bf16 前向）',
+    'step_3': 'DataLoader 初始化 + FineWeb 数据加载',
+    'step_4': 'HybridOptimizer + WarmupCosineAnnealingLR 初始化',
+    'step_5': 'NVFP4 伪量化层插入（实验组，仅FFN: up/gate/down_proj 的权重和激活）',
+    'step_6': '训练循环 (10K steps)',
+    'step_7': '指标收集 + 检查点保存',
+}
+```
+
+### 8.3 检查点配置
+```python
+checkpoint_config = {
+    'save_interval': 1000,              # 每1000步保存
+    'save_dir': '/path/to/checkpoints',
+    'format': 'pt',                     # PyTorch 格式（可选 'safetensors'）
+    'save_type': 'deduped',             # 去重保存
+    'save_last': True,                  # 保存最后一步
+    'save_best': True,                  # 保存最优损失
+    'async_save': False,                # 同步保存（实验场景更安全）
+    'components': [
+        'model_state_dict',
+        'optimizer_state_dict',
+        'scheduler_state_dict',
+        'dataloader_state_dict',        # 支持数据加载断点续训
+        'training_metrics',
+    ]
+}
+```
+
+### 8.4 日志配置
+```python
+logging_config = {
+    'log_type': 'WandbLogger',          # 使用 WandB 可视化
+    'log_interval': 100,                # 日志间隔
+    'include_metrics': [
+        'loss (BPB)',                   # 训练损失（bits per byte）
+        'z_loss',                       # Z-loss
+        'grad_norm',                    # 梯度范数
+        'learning_rate',                # 当前学习率
+        'per_source_losses',            # 各数据源分别的损失
+        'throughput (tokens/s)',        # 训练吞吐量
+        'gpu_memory',                   # GPU内存
+        'quantization_error',           # 量化误差（实验组）
+    ]
+}
+```
+
+---
+
+## 9. 实验验证和质量控制
+
+### 9.1 训练稳定性验证
+```python
+stability_checks = {
+    'gradient_explosion': 'grad_norm < 10.0',
+    'loss_divergence': 'loss_increase_streak < 100',
+    'memory_leak': 'memory_growth_rate < 1MB/step',
+    'quantization_error': 'quant_error < 0.1',
+    'nan_detection': 'no NaN in loss or gradients',
+}
+```
+
+### 9.2 对比一致性保证
+```python
+consistency_controls = {
+    'same_random_seed': 42,                       # 统一随机种子
+    'same_data': 'fineweb-1BT.json',             # 相同真实数据
+    'same_data_order': True,                      # DataLoader 相同 seed → 相同顺序
+    'same_initialization': 'kaiming_uniform',     # 相同参数初始化（attention.py init_weights）
+    'same_hardware': '4x B200 180GB',
+    'same_optimizer': 'HybridOptimizer(AdamW)',
+    'same_lr_schedule': 'warmup 2K + cosine decay 6e-4 → 3e-5',
+    'same_precision': 'fp32 weights + bf16 forward + fp32 gradients',
+}
+```
+
+---
+
+## 10. 预期输出和评估指标
+
+### 10.1 核心评估指标
+```python
+evaluation_metrics = {
+    'training_loss_bpb': {
+        'measure': 'Cross Entropy Loss / ln(2)',  # BPB (bits per byte)
+        'frequency': 'Every Step',
+        'target': 'Lower is Better',
+        'computation': 'aggregate_outputs_fn (nnscaler_train.py 第229行)'
+    },
+    'gradient_norm': {
+        'measure': 'L2 Norm of Gradients (before clipping)',
+        'frequency': 'Every Step',
+        'target': 'Stable < 5.0'
+    },
+    'convergence_speed': {
+        'measure': 'Steps to reach target loss',
+        'frequency': 'End of Training',
+        'target': 'Fewer Steps Better'
+    },
+    'per_source_loss': {
+        'measure': 'Per-dataset BPB breakdown',
+        'frequency': 'Every Log Interval',
+        'target': 'Compare across models'
+    },
+    'memory_efficiency': {
+        'measure': 'Peak GPU Memory Usage',
+        'frequency': 'Every 100 Steps',
+        'target': 'NVFP4 should use less memory'
+    }
+}
+```
+
+### 10.2 量化特定指标
+```python
+quantization_metrics = {
+    'quantization_error': {
+        'measure': 'MSE(original, quantized)',
+        'frequency': 'Every Step (when active)',
+        'target': '< 0.1'
+    },
+    'compression_ratio': {
+        'measure': 'Original Size / Quantized Size',
+        'frequency': 'Once',
+        'expected_value': '~4x (FP16 to FP4)'
+    }
+}
+```
+
+---
+
+## 11. 实验复现指南
+
+### 11.1 环境准备
+```bash
+# 1. 设置Python路径
+export PYTHONPATH="/home/yingbohao/llm-train:$PYTHONPATH"
+
+# 2. 安装依赖
+pip install torch>=2.0.0 triton>=2.0.0
+pip install blobfile tiktoken wandb numpy tensorboard
+pip install flash-attn nnscaler einops
+
+# 3. 验证CUDA环境
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+
+# 4. 验证 nnscaler
+python -c "import nnscaler; print(nnscaler.__version__)"
+```
+
+### 11.2 配置注册
+```python
+# 在 llm/config.py 中添加以下内容：
+# 1. model_args 字典中添加 "Base-0.4B", "GatedAttn-0.4B", "DiffAttn-0.4B", "GatedDiffAttn-0.4B"
+# 2. data_args 字典中添加 "nvfp4_fineweb"
+# 3. training_args 字典中添加 "nvfp4_experiment"
+# 详见本文档 第2.2节、第4.1节、第3.1节
+```
+
+### 11.3 基线训练复现
+```bash
+# 以 Base-0.4B 为例（对齐项目 YAML 风格）
+torchrun --nproc_per_node=4 llm/nnscaler_train.py \
+    --model Base-0.4B \
+    --data nvfp4_fineweb \
+    --hyperparams nvfp4_experiment \
+    --batch_size 2 \
+    --update_freq 2 \
+    --max_seq_len 4096 \
+    --num_workers 2 \
+    --seed 42 \
+    --plan_ngpus 1 \
+    --runtime_ngpus 4 \
+    --zero_group_size 4 \
+    --precision fp32 \
+    --xentropy_recompute \
+    --use_async_reducer \
+    --disable_shared_param_constraint \
+    --gpu_mem_constraint 135 \
+    --learning_rate 6e-4 \
+    --min_lr 3e-5 \
+    --warmup_iters 2000 \
+    --max_updates 10000 \
+    --save_path ./checkpoints/baseline/Base-0.4B \
+    --save_interval 1000 \
+    --wandb_project nvfp4_baseline \
+    --name Base-0.4B-baseline
+```
+
+### 11.4 量化训练复现
+```bash
+# NVFP4 量化训练（以 Base-0.4B 为例）
+# 与基线完全相同的配置，仅额外启用 --nvfp4_mode 1
+torchrun --nproc_per_node=4 llm/nnscaler_train.py \
+    --model Base-0.4B \
+    --data nvfp4_fineweb \
+    --hyperparams nvfp4_experiment \
+    --batch_size 2 \
+    --update_freq 2 \
+    --max_seq_len 4096 \
+    --num_workers 2 \
+    --seed 42 \
+    --plan_ngpus 1 \
+    --runtime_ngpus 4 \
+    --zero_group_size 4 \
+    --precision fp32 \
+    --xentropy_recompute \
+    --use_async_reducer \
+    --disable_shared_param_constraint \
+    --gpu_mem_constraint 135 \
+    --learning_rate 6e-4 \
+    --min_lr 3e-5 \
+    --warmup_iters 2000 \
+    --max_updates 10000 \
+    --nvfp4_mode 1 \
+    --save_path ./checkpoints/nvfp4/Base-0.4B \
+    --save_interval 1000 \
+    --wandb_project nvfp4_experiment \
+    --name Base-0.4B-nvfp4
+
+# 量化实现开发步骤（已完成）：
+# 1. 已实现 llm/kernel/nvfp4_quant.py — 纯 PyTorch 两级量化
+#    - FP4 E2M1 值表 + searchsorted 映射（匹配 Model-Optimizer 算法）
+#    - FP8 E4M3 block scale 量化（torch.float8_e4m3fn 原生 cast）
+#    - @torch.compile 优化的核心伪量化函数
+#    - NvFP4FakeQuant(autograd.Function): forward 两级伪量化 + backward STE 直通
+#    - nvfp4_fake_quant(x): 便捷接口
+# 2. 已修改 llm/arch/config.py — 添加 nvfp4_mode: int = 0  # 0: 禁用, 1: FFN, 2: FFN+QKVO
+# 3. 已修改 llm/arch/ffn.py — FeedForwardNetwork.__init__ 接收 nvfp4_mode,
+#    forward 中 nvfp4_mode >= 1 时对输入激活和权重做 nvfp4_fake_quant
+# 4. 已修改 llm/arch/attention.py — Attention.__init__ 接收 nvfp4_mode,
+#    forward 中 nvfp4_mode >= 2 时对 Q/K/V/O 投影做 nvfp4_fake_quant
+# 5. 已修改 llm/arch/model.py — 将 args.nvfp4_mode 传递到 FFN 层
+# 6. 已修改 llm/nnscaler_train.py — 添加 --nvfp4_mode CLI 参数
+# 7. 已实现 llm/kernel/mxfp_quant.py — OCP MX 格式 MXFP4/MXFP8 伪量化（纯 PyTorch）
+#    - E8M0 scale 量化：snap to nearest power of 2
+#    - MXFP4 (weight): FP4 E2M1, block=32, E8M0 scale, searchsorted 映射
+#    - MXFP8 (activation): FP8 E4M3, block=32, E8M0 scale, torch.float8_e4m3fn cast
+#    - MXFP4FakeQuant / MXFP8FakeQuant (autograd.Function): forward 量化 + backward STE
+#    - 无二级 scale 量化（与 NVFP4 的 FP8 E4M3 两级 scale 不同）
+# 8. 已修改 llm/arch/ffn.py — nvfp4_mode == 3 时用 mxfp4(weight) + mxfp8(activation)
+# 9. 已修改 llm/arch/attention.py — nvfp4_mode == 3 时用 mxfp4(weight) + mxfp8(activation)
+# 10. 已修改 scripts/nvfp4_experiment/run_single.sh — 添加 mxw4a8 mode (--nvfp4_mode 3)
+# 11. 已创建 tests/test_mxfp_quant.py — MXFP4/MXFP8 量化正确性测试（17项测试）
+```
+
+### 11.5 结果分析
+```bash
+# WandB 对比分析：
+# 将基线和量化训练的 WandB 数据导出后进行对比
+# 主要关注：loss (BPB) 差异、梯度范数稳定性、收敛速度
+```
+
+---
+
+## 12. 配置文件汇总
+
+### 12.1 核心配置参数总览
+```yaml
+# 完整配置摘要
+experiment_config:
+  name: "NVFP4_W4A4_vs_Baseline_Attention_Study"
+  models: ["Base-0.4B", "GatedAttn-0.4B", "DiffAttn-0.4B", "GatedDiffAttn-0.4B"]
+
+training_config:
+  max_updates: 10000
+  warmup_iters: 2000
+  learning_rate: 6e-4                    # 与项目 YOCO-3B 一致
+  min_lr: 3e-5                           # 峰值的 ~5%（余弦衰减终点）
+  lr_schedule: "warmup 2K + cosine decay"  # min_lr < learning_rate → 余弦衰减
+  lr_scheduler: "WarmupCosineAnnealingLR"
+  optimizer: "HybridOptimizer(AdamW)"
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  embed_weight_decay: 0.0                # embedding 不衰减
+  clip_grad_norm: 1.0
+  batch_size: 2                          # 每 GPU
+  update_freq: 2                         # 梯度累积
+  effective_batch_size: 16               # 4 GPU × 2 batch × 2 accum
+  precision: "fp32 (weights fp32, forward bf16, gradients fp32)"  # MixPrecisionLinear 混合精度
+  z_loss_scale: 0.0                     # 10K 步实验不启用（默认 start_step=10000）
+  disable_shared_param_constraint: true  # 与项目 YAML 一致
+  gpu_mem_constraint: 135                # B200 180GB 的 ~75%
+
+data_config:
+  dataset: "FineWeb-1BT"
+  data_path: "/mnt/msranlp/lidong1/data/llm_debug/fineweb-1BT.json"
+  max_seq_len: 4096
+  packing_strategy: "ffd"
+  num_workers: 2
+
+quantization_config:
+  nvfp4_w4a4:                                # mode=1/2: NVFP4 W4A4
+    algorithm: "NVFP4_two_level"              # 两级量化（FP4 E2M1 值 + FP8 E4M3 块尺度）
+    value_format: "FP4 E2M1"                # 值：4-bit, 16个量化级别 {0,0.5,1,1.5,2,3,4,6}×{+,-}
+    scale_format: "FP8 E4M3"                # 块尺度：8-bit, torch.float8_e4m3fn 原生 cast
+    global_scale_format: "FP32"              # 全局尺度：FP32（用于映射 block scale 到 FP8 动态范围）
+    block_size: 16                           # 每16个元素共享一个 FP8 尺度
+    scale_quantization: "enabled"            # ✅ FP8 E4M3 block scale 量化已启用
+    scale_quantization_method: "torch.float8_e4m3fn cast"  # PyTorch 原生硬件级 FP8 舍入
+    scope: "FFN_only (mode=1) / FFN+QKVO (mode=2)"
+    quantize_weights: true                   # W4：权重伪量化
+    quantize_activations: true               # A4：激活伪量化
+    gradient_method: "STE_pass_through"      # 纯直通估计器（不保存前向张量）
+    implementation: "PyTorch native (torch.compile + torch.float8_e4m3fn + autograd.Function)"
+    reference_spec: "NVIDIA NVFP4_DEFAULT_CFG: num_bits=(2,1), scale_bits=(4,3), block_size=16"
+    training_mode: "train_from_scratch"       # 从头训练，非 QAT 微调
+
+  mxfp_w4a8:                                 # mode=3: MXFP4(W4)+MXFP8(A8) OCP MX 格式
+    algorithm: "OCP_MX_single_level"          # 单级量化（E8M0 power-of-2 scale，无二级量化）
+    weight_format: "MXFP4 (FP4 E2M1)"       # 权重：4-bit, 16个量化级别
+    activation_format: "MXFP8 (FP8 E4M3)"   # 激活：8-bit, 448个量化级别
+    scale_format: "E8M0 (power-of-2 only)"   # 块尺度：2^ceil(log2(amax/max_val))
+    block_size: 32                           # OCP MX 标准 block size
+    scope: "FFN+QKVO (mode=3)"              # 与 mode=2 相同的量化位置
+    quantize_weights: true                   # W4：MXFP4 权重伪量化
+    quantize_activations: true               # A8：MXFP8 激活伪量化
+    gradient_method: "STE_pass_through"      # 纯直通估计器
+    implementation: "PyTorch native (torch.compile + E8M0 snap + torch.float8_e4m3fn)"
+    reference_spec: "OCP MX format: MXFP4 (E2M1, block=32, E8M0) + MXFP8 (E4M3, block=32, E8M0)"
+    target_hardware: "Blackwell B200 W4A8 tensor core"
+    training_mode: "train_from_scratch"
+
+hardware_config:
+  gpu_type: "B200 180GB"
+  gpu_count: 4
+  memory_per_gpu: "180GB"
+  parallel_framework: "nnscaler"
+  plan_ngpus: 1
+  zero_group_size: 4
+```
+
+---
+
+## 13. 预期研究价值
+
+### 13.1 学术贡献
+- **量化算法评估:** 在不同注意力架构下验证NVFP4算法有效性
+- **架构特异性分析:** 揭示 Gated Attention、Differential Attention 对量化敏感性的影响
+- **训练稳定性研究:** 量化训练过程中的收敛性分析（基于真实数据的 BPB 指标）
+
+### 13.2 工程价值
+- **部署指导:** 为生产环境中的模型量化部署提供参考
+- **资源优化:** 评估量化对GPU内存和计算效率的改善
+- **架构选择:** 为量化友好的模型架构设计提供依据
+
+---
+
+## 14. 实验时间线和里程碑
+
+### 14.1 执行时间线
+```yaml
+timeline:
+  phase_0_config: "配置注册和环境验证"           # ~30分钟
+  phase_1_baseline: "基线训练（4个模型×10K步）"    # 每模型~2-3小时
+  phase_2_quantization: "量化训练（4个模型×10K步）" # 每模型~2-3小时
+  phase_3_analysis: "结果分析和报告"              # ~1小时
+```
+
+### 14.2 关键里程碑
+- 🟡 **配置注册完成:** 在 `llm/config.py` 中添加4个模型 + 数据 + 训练配置
+- 🟡 **环境验证完成:** 所有依赖和硬件配置正确
+- 🟡 **基线训练完成:** 4个模型标准混合精度基线训练数据收集
+- 🟡 **量化训练完成:** 4个模型 NVFP4 量化训练数据收集
+- 🟡 **对比分析完成:** 生成完整的性能对比报告
+
+---
+
+## 附录A：与原配置文档的主要改进
+
+| 项目 | 原配置 | 优化后配置 | 改进原因 |
+|------|--------|-----------|---------|
+| 数据集 | 合成随机数据 | FineWeb-1BT 真实数据 | 反映真实训练场景，损失可解释 |
+| 学习率 | `3e-4` | `6e-4` | 与项目 YOCO-3B 实际训练一致 |
+| 学习率调度 | 手动拼接 LinearLR + CosineAnnealingLR | 项目原生 `WarmupCosineAnnealingLR` | 单一调度器，参数更清晰 |
+| 学习率策略 | 余弦衰减到 `1e-5` | 余弦衰减 `6e-4` → `3e-5`（项目 lr + 适配短实验） | 峰值 lr 对齐项目，衰减适配 10K 步 |
+| 优化器 | 简单 AdamW | `HybridOptimizer`（embedding 无衰减） | 与项目实际训练一致 |
+| batch_size | `4` per GPU, `update_freq=1` | `2` per GPU, `update_freq=2` | 与项目 YOCO-3B YAML 一致 |
+| 序列长度 | 512 | 4096 | `ModelArgs` 默认值，模型合理选择 |
+| 精度模式 | `--precision bf16` | `--precision fp32`（权重fp32+前向bf16+梯度fp32） | 与项目所有 YAML 一致 |
+| z_loss | 未配置 | 不启用（`z_loss_start_step=10000` > `max_updates`） | 10K 步实验中无效果 |
+| `--disable_shared_param_constraint` | 未设置 | ✅ 启用 | 项目所有 YAML 都有 |
+| `--gpu_mem_constraint` | 默认 64 | 135 | 匹配 B200 180GB 显存（~75%） |
+| 并行框架 | 简单 DataParallel | nnscaler + ZeRO | 项目标准分布式方案 |
+| 模型配置 | 独立 ModelArgs | 注册到 `llm/config.py` | 与项目配置管理体系统一 |
+| 训练命令 | 自定义脚本 | `torchrun + nnscaler_train.py` | 使用项目标准训练流程 |
+| 损失指标 | Cross Entropy | BPB (bits per byte) | 与项目日志格式一致 |
+
+---
+
+*本文档基于 llm-train 项目源码分析生成，确保配置与项目实际实现一致。*

@@ -1,0 +1,230 @@
+{
+  "numStartups": 9,
+  "hasSeenTasksHint": true,
+  "tipsHistory": {
+    "new-user-warmup": 7,
+    "plan-mode-for-complex-tasks": 6,
+    "memory-command": 1,
+    "theme-command": 1,
+    "status-line": 1,
+    "prompt-queue": 1,
+    "enter-to-steer-in-relatime": 1,
+    "todo-list": 1,
+    "install-github-app": 1,
+    "install-slack-app": 1,
+    "drag-and-drop-images": 1,
+    "double-esc-code-restore": 1,
+    "continue": 1,
+    "shift-tab": 1,
+    "image-paste": 1,
+    "web-app": 1,
+    "mobile-app": 1,
+    "shift-enter": 4,
+    "custom-agents": 6,
+    "agent-flag": 6
+  },
+  "promptQueueUseCount": 27,
+  "showExpandedTodos": true,
+  "firstStartTime": "2026-03-03T13:42:43.534Z",
+  "opusProMigrationComplete": true,
+  "sonnet1m45MigrationComplete": true,
+  "cachedChromeExtensionInstalled": false,
+  "shiftEnterKeyBindingInstalled": true,
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "2.1.63",
+  "userID": "b3a26a042cb128ab18908c65cea22aec76ce0cd593be231194541c2f614fbc9a",
+  "lastReleaseNotesSeen": "2.1.63",
+  "projects": {
+    "/home/yingbohao": {
+      "allowedTools": [],
+      "mcpContextUris": [],
+      "mcpServers": {},
+      "enabledMcpjsonServers": [],
+      "disabledMcpjsonServers": [],
+      "hasTrustDialogAccepted": false,
+      "projectOnboardingSeenCount": 1,
+      "hasClaudeMdExternalIncludesApproved": false,
+      "hasClaudeMdExternalIncludesWarningShown": false,
+      "exampleFiles": [],
+      "lastCost": 0.5701935,
+      "lastAPIDuration": 271361,
+      "lastAPIDurationWithoutRetries": 57582,
+      "lastToolDuration": 2094,
+      "lastDuration": 1993903,
+      "lastLinesAdded": 0,
+      "lastLinesRemoved": 0,
+      "lastTotalInputTokens": 14183,
+      "lastTotalOutputTokens": 1781,
+      "lastTotalCacheCreationInputTokens": 0,
+      "lastTotalCacheReadInputTokens": 149249,
+      "lastTotalWebSearchRequests": 0,
+      "lastFpsAverage": 13.13,
+      "lastFpsLow1Pct": 766.23,
+      "lastModelUsage": {
+        "claude-opus-4.6-1m": {
+          "inputTokens": 14183,
+          "outputTokens": 1781,
+          "cacheReadInputTokens": 149249,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.5701935
+        }
+      },
+      "lastSessionId": "fc03563c-0245-48e6-b044-748e835b0527",
+      "lastSessionMetrics": {
+        "frame_duration_ms_count": 5815,
+        "frame_duration_ms_min": 0.038906000001588836,
+        "frame_duration_ms_max": 12.347427000000607,
+        "frame_duration_ms_avg": 0.29435769888248337,
+        "frame_duration_ms_p50": 0.07895950000238372,
+        "frame_duration_ms_p95": 0.6210939499978848,
+        "frame_duration_ms_p99": 1.2239745500016577,
+        "pre_tool_hook_duration_ms_count": 6,
+        "pre_tool_hook_duration_ms_min": 0,
+        "pre_tool_hook_duration_ms_max": 1,
+        "pre_tool_hook_duration_ms_avg": 0.5,
+        "pre_tool_hook_duration_ms_p50": 0.5,
+        "pre_tool_hook_duration_ms_p95": 1,
+        "pre_tool_hook_duration_ms_p99": 1
+      },
+      "hasCompletedProjectOnboarding": true
+    },
+    "/home/yingbohao/llm-train": {
+      "allowedTools": [],
+      "mcpContextUris": [],
+      "mcpServers": {},
+      "enabledMcpjsonServers": [],
+      "disabledMcpjsonServers": [],
+      "hasTrustDialogAccepted": true,
+      "projectOnboardingSeenCount": 0,
+      "hasClaudeMdExternalIncludesApproved": false,
+      "hasClaudeMdExternalIncludesWarningShown": false,
+      "lastSessionMetrics": {
+        "frame_duration_ms_count": 18323,
+        "frame_duration_ms_min": 0.015753000014228746,
+        "frame_duration_ms_max": 1020.3218049993739,
+        "frame_duration_ms_avg": 1.1974092203777136,
+        "frame_duration_ms_p50": 0.7476929998956621,
+        "frame_duration_ms_p95": 1.4957008503843099,
+        "frame_duration_ms_p99": 3.0552811796849686,
+        "pre_tool_hook_duration_ms_count": 104,
+        "pre_tool_hook_duration_ms_min": 0,
+        "pre_tool_hook_duration_ms_max": 2,
+        "pre_tool_hook_duration_ms_avg": 0.6442307692307693,
+        "pre_tool_hook_duration_ms_p50": 1,
+        "pre_tool_hook_duration_ms_p95": 1,
+        "pre_tool_hook_duration_ms_p99": 1,
+        "hook_duration_ms_count": 81,
+        "hook_duration_ms_min": 0,
+        "hook_duration_ms_max": 1,
+        "hook_duration_ms_avg": 0.2222222222222222,
+        "hook_duration_ms_p50": 0,
+        "hook_duration_ms_p95": 1,
+        "hook_duration_ms_p99": 1
+      },
+      "hasCompletedProjectOnboarding": true,
+      "lastCost": 23.4514755,
+      "lastAPIDuration": 1144481,
+      "lastAPIDurationWithoutRetries": 1144447,
+      "lastToolDuration": 361141,
+      "lastDuration": 42960218,
+      "lastLinesAdded": 541,
+      "lastLinesRemoved": 217,
+      "lastTotalInputTokens": 651435,
+      "lastTotalOutputTokens": 55671,
+      "lastTotalCacheCreationInputTokens": 0,
+      "lastTotalCacheReadInputTokens": 6336417,
+      "lastTotalWebSearchRequests": 0,
+      "lastFpsAverage": 1.82,
+      "lastFpsLow1Pct": 442.73,
+      "lastModelUsage": {
+        "claude-opus-4.6-1m": {
+          "inputTokens": 651435,
+          "outputTokens": 55671,
+          "cacheReadInputTokens": 6336417,
+          "cacheCreationInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 23.4514755
+        }
+      },
+      "lastSessionId": "4b0ee9c6-20bd-4ff0-8465-c984c7d9032a"
+    }
+  },
+  "officialMarketplaceAutoInstallAttempted": true,
+  "officialMarketplaceAutoInstalled": true,
+  "hasIdeOnboardingBeenShown": {
+    "vscode": true
+  },
+  "toolUsage": {
+    "Read": {
+      "usageCount": 540,
+      "lastUsedAt": 1772820630767
+    },
+    "Agent": {
+      "usageCount": 36,
+      "lastUsedAt": 1772820307247
+    },
+    "Bash": {
+      "usageCount": 656,
+      "lastUsedAt": 1772820728345
+    },
+    "Grep": {
+      "usageCount": 161,
+      "lastUsedAt": 1772820357802
+    },
+    "Write": {
+      "usageCount": 32,
+      "lastUsedAt": 1772818104831
+    },
+    "Edit": {
+      "usageCount": 200,
+      "lastUsedAt": 1772819647200
+    },
+    "Glob": {
+      "usageCount": 52,
+      "lastUsedAt": 1772820336658
+    },
+    "TaskOutput": {
+      "usageCount": 14,
+      "lastUsedAt": 1772650041629
+    },
+    "WebSearch": {
+      "usageCount": 111,
+      "lastUsedAt": 1772820617846
+    },
+    "WebFetch": {
+      "usageCount": 96,
+      "lastUsedAt": 1772820626016
+    },
+    "TaskCreate": {
+      "usageCount": 29,
+      "lastUsedAt": 1772820338157
+    },
+    "TaskUpdate": {
+      "usageCount": 59,
+      "lastUsedAt": 1772820638370
+    },
+    "EnterPlanMode": {
+      "usageCount": 3,
+      "lastUsedAt": 1772815469489
+    },
+    "AskUserQuestion": {
+      "usageCount": 5,
+      "lastUsedAt": 1772817133749
+    },
+    "TaskStop": {
+      "usageCount": 3,
+      "lastUsedAt": 1772650947094
+    }
+  },
+  "githubRepoPaths": {
+    "msrallm/llm-train": [
+      "/home/yingbohao/llm-train"
+    ]
+  },
+  "showSpinnerTree": false,
+  "clientDataCache": {
+    "data": null,
+    "timestamp": 1772653942341
+  }
+}

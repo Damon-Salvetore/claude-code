@@ -1,0 +1,1185 @@
+     1→# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+     2→# SPDX-License-Identifier: Apache-2.0
+     3→#
+     4→# Licensed under the Apache License, Version 2.0 (the "License");
+     5→# you may not use this file except in compliance with the License.
+     6→# You may obtain a copy of the License at
+     7→#
+     8→# http://www.apache.org/licenses/LICENSE-2.0
+     9→#
+    10→# Unless required by applicable law or agreed to in writing, software
+    11→# distributed under the License is distributed on an "AS IS" BASIS,
+    12→# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    13→# See the License for the specific language governing permissions and
+    14→# limitations under the License.
+    15→
+    16→"""This document lists the quantization formats supported by Model Optimizer and example quantization configs.
+    17→
+    18→.. _quantization-formats:
+    19→
+    20→Quantization Formats
+    21→==========================================
+    22→
+    23→The following table lists the quantization formats supported by Model Optimizer and the corresponding quantization
+    24→config. See :ref:`Quantization Configs <example-quantization-configs>` for the
+    25→specific quantization config definitions.
+    26→
+    27→Please see :doc:`choosing the right quantization formats <../../guides/_choosing_quant_methods>` to
+    28→learn more about the formats and their use-cases.
+    29→
+    30→.. note::
+    31→
+    32→    The recommended configs given below are for LLM models. For CNN models, only INT8 quantization
+    33→    is supported. Please use quantization config ``INT8_DEFAULT_CFG`` for CNN models.
+    34→
+    35→=================================   =======================================================
+    36→Quantization  Format                Model Optimizer config
+    37→=================================   =======================================================
+    38→INT8                                ``INT8_SMOOTHQUANT_CFG``
+    39→
+    40→FP8                                 ``FP8_DEFAULT_CFG``
+    41→
+    42→INT4 Weights only AWQ (W4A16)       ``INT4_AWQ_CFG``
+    43→
+    44→INT4-FP8 AWQ (W4A8)                 ``W4A8_AWQ_BETA_CFG``
+    45→
+    46→=================================   =======================================================
+    47→
+    48→.. _quantization-configs:
+    49→
+    50→Quantization Configs
+    51→================================
+    52→
+    53→Quantization config is dictionary specifying the values for keys ``"quant_cfg"`` and
+    54→``"algorithm"``. The ``"quant_cfg"`` key specifies the quantization configurations. The
+    55→``"algorithm"`` key specifies the ``algorithm`` argument to
+    56→:meth:`calibrate <modelopt.torch.quantization.model_calib.calibrate>`. Please see :class:`QuantizeConfig`
+    57→for the quantization config definition.
+    58→
+    59→'Quantization configurations' is a dictionary mapping wildcards or filter functions
+    60→to its 'quantizer attributes'. The wildcards or filter functions  are matched
+    61→against the quantizer module names. The quantizer modules have names ending with
+    62→``weight_quantizer`` and ``input_quantizer`` and they perform weight quantization and
+    63→input quantization (or activation quantization) respectively. The quantizer modules are generally
+    64→instances of
+    65→:class:`TensorQuantizer <modelopt.torch.quantization.nn.modules.tensor_quantizer.TensorQuantizer>`.
+    66→The quantizer attributes are defined by :class:`QuantizerAttributeConfig`. See :class:`QuantizerAttributeConfig`
+    67→for details on the quantizer attributes and their values.
+    68→
+    69→The key `"default"` from the quantization configuration dictionary is applied if no other wildcard or filter functions
+    70→match the quantizer module name.
+    71→
+    72→The quantizer attributes are applied in the order they are specified. For the missing attributes, the default attributes
+    73→as defined by :class:`QuantizerAttributeConfig` are used.
+    74→
+    75→Quantizer attributes can also be a list of dictionaries. In this case, the matched quantizer module
+    76→is replaced with a
+    77→:class:`SequentialQuantizer <modelopt.torch.quantization.nn.modules.tensor_quantizer.SequentialQuantizer>`
+    78→module which is used to quantize a tensor in multiple formats sequentially. Each quantizer attribute
+    79→dictionary in the list specifies the quantization formats for each quantization step of the
+    80→sequential quantizer. For example, `SequentialQuantizer` is used in 'INT4 Weights, FP8 Activations'
+    81→quantization in which the weights are quantized in INT4 followed by FP8.
+    82→
+    83→In addition, the dictionary entries could also be pytorch module class names mapping the class specific
+    84→quantization configurations. The pytorch modules should have a quantized equivalent.
+    85→
+    86→To get the string representation of a module class, do:
+    87→
+    88→.. code-block::
+    89→
+    90→    from modelopt.torch.quantization import QuantModuleRegistry
+    91→
+    92→    # Get the class name for nn.Conv2d
+    93→    class_name = QuantModuleRegistry.get_key(nn.Conv2d)
+    94→
+    95→Here is an example of a quantization config:
+    96→
+    97→.. code-block::
+    98→
+    99→    MY_QUANT_CFG = {
+   100→        "quant_cfg": {
+   101→            # Quantizer wildcard strings mapping to quantizer attributes
+   102→            "*weight_quantizer": {"num_bits": 8, "axis": 0},
+   103→            "*input_quantizer": {"num_bits": 8, "axis": None},
+   104→
+   105→            # Module class names mapping to quantizer configurations
+   106→            "nn.LeakyReLU": {"*input_quantizer": {"enable": False}},
+   107→
+   108→        }
+   109→    }
+   110→
+   111→.. _example-quantization-configs:
+   112→
+   113→Example Quantization Configurations
+   114→==========================================
+   115→
+   116→These example configs can be accessed as attributes of ``modelopt.torch.quantization`` and can be given as
+   117→input to :meth:`mtq.quantize() <modelopt.torch.quantization.model_quant.quantize>`. For example:
+   118→
+   119→.. code-block::
+   120→
+   121→    import modelopt.torch.quantization as mtq
+   122→    model = mtq.quantize(model, mtq.INT8_DEFAULT_CFG, forward_loop)
+   123→
+   124→You can also create your own config by following these examples.
+   125→For instance, if you want to quantize a model with int4 AWQ algorithm, but need to skip quantizing
+   126→the layer named ``lm_head``,  you can create a custom config and quantize your model as following:
+   127→
+   128→.. code-block::
+   129→
+   130→    # Create custom config
+   131→    CUSTOM_INT4_AWQ_CFG = copy.deepcopy(mtq.INT4_AWQ_CFG)
+   132→    CUSTOM_INT4_AWQ_CFG["quant_cfg"]["*lm_head*"] = {"enable": False}
+   133→
+   134→    # quantize model
+   135→    model = mtq.quantize(model, CUSTOM_INT4_AWQ_CFG, forward_loop)
+   136→
+   137→"""
+   138→
+   139→from collections.abc import Callable
+   140→from typing import Literal
+   141→
+   142→from pydantic import ValidationInfo, field_validator, model_validator
+   143→
+   144→from modelopt.torch.opt.config import ModeloptBaseConfig, ModeloptField
+   145→from modelopt.torch.utils.network import ConstructorLike
+   146→
+   147→_default_disabled_quantizer_cfg = {
+   148→    "nn.BatchNorm1d": {"*": {"enable": False}},
+   149→    "nn.BatchNorm2d": {"*": {"enable": False}},
+   150→    "nn.BatchNorm3d": {"*": {"enable": False}},
+   151→    "nn.LeakyReLU": {"*": {"enable": False}},
+   152→    "*lm_head*": {"enable": False},
+   153→    "*proj_out.*": {"enable": False},  # In Whisper model, lm_head has key name proj_out
+   154→    "*block_sparse_moe.gate*": {"enable": False},  # Skip the MOE router
+   155→    "*router*": {"enable": False},  # Skip the MOE router
+   156→    "*mlp.gate.*": {"enable": False},  # Skip the MOE router
+   157→    "*mlp.shared_expert_gate.*": {"enable": False},  # Skip the MOE router
+   158→    "*output_layer*": {"enable": False},
+   159→    "output.*": {"enable": False},
+   160→    "default": {"enable": False},
+   161→}
+   162→
+   163→INT8_DEFAULT_CFG = {
+   164→    "quant_cfg": {
+   165→        "*weight_quantizer": {"num_bits": 8, "axis": 0},
+   166→        "*input_quantizer": {"num_bits": 8, "axis": None},
+   167→        **_default_disabled_quantizer_cfg,
+   168→    },
+   169→    "algorithm": "max",
+   170→}
+   171→
+   172→INT8_SMOOTHQUANT_CFG = {
+   173→    "quant_cfg": {
+   174→        "*weight_quantizer": {"num_bits": 8, "axis": 0},
+   175→        "*input_quantizer": {"num_bits": 8, "axis": None},
+   176→        **_default_disabled_quantizer_cfg,
+   177→    },
+   178→    "algorithm": "smoothquant",
+   179→}
+   180→
+   181→FP8_DEFAULT_CFG = {
+   182→    "quant_cfg": {
+   183→        "*weight_quantizer": {"num_bits": (4, 3), "axis": None},
+   184→        "*input_quantizer": {"num_bits": (4, 3), "axis": None},
+   185→        **_default_disabled_quantizer_cfg,
+   186→    },
+   187→    "algorithm": "max",
+   188→}
+   189→
+   190→FP8_PER_CHANNEL_PER_TOKEN_CFG = {
+   191→    "quant_cfg": {
+   192→        "*weight_quantizer": {"num_bits": (4, 3), "axis": 0},
+   193→        "*input_quantizer": {
+   194→            "num_bits": (4, 3),
+   195→            "type": "dynamic",
+   196→            "block_sizes": {-1: None},
+   197→        },
+   198→        **_default_disabled_quantizer_cfg,
+   199→    },
+   200→    "algorithm": "max",
+   201→}
+   202→
+   203→# FP8 2D blockwise fake quantization config for deepseek models
+   204→FP8_2D_BLOCKWISE_WEIGHT_ONLY_CFG = {
+   205→    "quant_cfg": {
+   206→        "*weight_quantizer": {
+   207→            "num_bits": (4, 3),
+   208→            "block_sizes": {-1: 128, -2: 128},
+   209→            "enable": True,
+   210→        },
+   211→        "*input_quantizer": {"enable": False},
+   212→        **_default_disabled_quantizer_cfg,
+   213→    },
+   214→    "algorithm": "max",
+   215→}
+   216→
+   217→INT4_BLOCKWISE_WEIGHT_ONLY_CFG = {
+   218→    "quant_cfg": {
+   219→        "*weight_quantizer": {"num_bits": 4, "block_sizes": {-1: 128}, "enable": True},
+   220→        "*input_quantizer": {"enable": False},
+   221→        **_default_disabled_quantizer_cfg,
+   222→    },
+   223→    "algorithm": "max",
+   224→}
+   225→
+   226→INT4_AWQ_CFG = {
+   227→    "quant_cfg": {
+   228→        "*weight_quantizer": {
+   229→            "num_bits": 4,
+   230→            "block_sizes": {-1: 128, "type": "static"},
+   231→            "enable": True,
+   232→        },
+   233→        "*input_quantizer": {"enable": False},
+   234→        **_default_disabled_quantizer_cfg,
+   235→    },
+   236→    "algorithm": {"method": "awq_lite", "alpha_step": 0.1},
+   237→    # "algorithm": {"method": "awq_full", "alpha_step": 0.1, "max_co_batch_size": 1024},
+   238→    # "algorithm": {"method": "awq_clip", "max_co_batch_size": 2048},
+   239→}
+   240→
+   241→# W4A8 currently uses INT4 blockwise quantization (block size = 128) followed by FP8 quantization
+   242→# for weights. This could change in the future
+   243→W4A8_AWQ_BETA_CFG = {
+   244→    "quant_cfg": {
+   245→        "*weight_quantizer": [
+   246→            {"num_bits": 4, "block_sizes": {-1: 128, "type": "static"}, "enable": True},
+   247→            {"num_bits": (4, 3), "axis": None, "enable": True},
+   248→        ],
+   249→        "*input_quantizer": {"num_bits": (4, 3), "axis": None, "enable": True},
+   250→        **_default_disabled_quantizer_cfg,
+   251→    },
+   252→    "algorithm": "awq_lite",
+   253→}
+   254→
+   255→MXFP8_DEFAULT_CFG = {
+   256→    "quant_cfg": {
+   257→        "*weight_quantizer": {
+   258→            "num_bits": (4, 3),
+   259→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   260→            "enable": True,
+   261→        },
+   262→        "*input_quantizer": {
+   263→            "num_bits": (4, 3),
+   264→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   265→            "enable": True,
+   266→        },
+   267→        **_default_disabled_quantizer_cfg,
+   268→    },
+   269→    "algorithm": None,
+   270→}
+   271→
+   272→MXFP6_DEFAULT_CFG = {
+   273→    "quant_cfg": {
+   274→        "*weight_quantizer": {
+   275→            "num_bits": (3, 2),
+   276→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   277→            "enable": True,
+   278→        },
+   279→        "*input_quantizer": {
+   280→            "num_bits": (3, 2),
+   281→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   282→            "enable": True,
+   283→        },
+   284→        **_default_disabled_quantizer_cfg,
+   285→    },
+   286→    "algorithm": None,
+   287→}
+   288→
+   289→MXFP4_DEFAULT_CFG = {
+   290→    "quant_cfg": {
+   291→        "*weight_quantizer": {
+   292→            "num_bits": (2, 1),
+   293→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   294→            "enable": True,
+   295→        },
+   296→        "*input_quantizer": {
+   297→            "num_bits": (2, 1),
+   298→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   299→            "enable": True,
+   300→        },
+   301→        **_default_disabled_quantizer_cfg,
+   302→    },
+   303→    "algorithm": None,
+   304→}
+   305→
+   306→W4A8_MXFP4_FP8_CFG = {
+   307→    "quant_cfg": {
+   308→        "*weight_quantizer": {
+   309→            "num_bits": (2, 1),
+   310→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   311→            "enable": True,
+   312→        },
+   313→        "*input_quantizer": {"num_bits": (4, 3), "axis": None},
+   314→        **_default_disabled_quantizer_cfg,
+   315→    },
+   316→    "algorithm": None,
+   317→}
+   318→
+   319→MXINT8_DEFAULT_CFG = {
+   320→    "quant_cfg": {
+   321→        "*weight_quantizer": {
+   322→            "num_bits": 8,
+   323→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   324→            "enable": True,
+   325→        },
+   326→        "*input_quantizer": {
+   327→            "num_bits": 8,
+   328→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   329→            "enable": True,
+   330→        },
+   331→        **_default_disabled_quantizer_cfg,
+   332→    },
+   333→    "algorithm": None,
+   334→}
+   335→
+   336→FP8_KV_CFG = {
+   337→    "quant_cfg": {
+   338→        "*[kv]_bmm_quantizer": {
+   339→            "num_bits": (4, 3),
+   340→            "axis": None,
+   341→            "enable": True,
+   342→        },
+   343→        "default": {"enable": False},
+   344→    },
+   345→    "algorithm": "max",
+   346→}
+   347→
+   348→FP8_AFFINE_KV_CFG = {
+   349→    "quant_cfg": {
+   350→        "*[kv]_bmm_quantizer": {
+   351→            "num_bits": (4, 3),
+   352→            "axis": None,
+   353→            "bias": {-2: None, -4: None, "type": "static"},
+   354→        },
+   355→        "default": {"enable": False},
+   356→    },
+   357→    "algorithm": "max",
+   358→}
+   359→
+   360→NVFP4_DEFAULT_CFG = {
+   361→    "quant_cfg": {
+   362→        "*weight_quantizer": {
+   363→            "num_bits": (2, 1),
+   364→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   365→            "axis": None,
+   366→            "enable": True,
+   367→        },
+   368→        "*input_quantizer": {
+   369→            "num_bits": (2, 1),
+   370→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   371→            "axis": None,
+   372→            "enable": True,
+   373→        },
+   374→        **_default_disabled_quantizer_cfg,
+   375→    },
+   376→    "algorithm": "max",
+   377→}
+   378→
+   379→
+   380→NVFP4_AWQ_LITE_CFG = {
+   381→    "quant_cfg": {
+   382→        "*weight_quantizer": {
+   383→            "num_bits": (2, 1),
+   384→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   385→            "axis": None,
+   386→            "enable": True,
+   387→        },
+   388→        "*input_quantizer": {
+   389→            "num_bits": (2, 1),
+   390→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   391→            "axis": None,
+   392→            "enable": True,
+   393→        },
+   394→        **_default_disabled_quantizer_cfg,
+   395→    },
+   396→    "algorithm": "awq_lite",
+   397→}
+   398→
+   399→NVFP4_AWQ_CLIP_CFG = {
+   400→    "quant_cfg": {
+   401→        "*weight_quantizer": {
+   402→            "num_bits": (2, 1),
+   403→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   404→            "axis": None,
+   405→            "enable": True,
+   406→        },
+   407→        "*input_quantizer": {
+   408→            "num_bits": (2, 1),
+   409→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   410→            "axis": None,
+   411→            "enable": True,
+   412→        },
+   413→        **_default_disabled_quantizer_cfg,
+   414→    },
+   415→    "algorithm": {"method": "awq_clip"},
+   416→}
+   417→
+   418→NVFP4_AWQ_FULL_CFG = {
+   419→    "quant_cfg": {
+   420→        "*weight_quantizer": {
+   421→            "num_bits": (2, 1),
+   422→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   423→            "axis": None,
+   424→            "enable": True,
+   425→        },
+   426→        "*input_quantizer": {
+   427→            "num_bits": (2, 1),
+   428→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   429→            "axis": None,
+   430→            "enable": True,
+   431→        },
+   432→        **_default_disabled_quantizer_cfg,
+   433→    },
+   434→    "algorithm": {"method": "awq_full", "alpha_step": 0.1},
+   435→}
+   436→
+   437→
+   438→NVFP4_AFFINE_KV_CFG = {
+   439→    "quant_cfg": {
+   440→        "*[kv]_bmm_quantizer": {
+   441→            "num_bits": (2, 1),
+   442→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   443→            "axis": None,
+   444→            "enable": True,
+   445→            "bias": {-2: None, -4: None, "type": "static"},
+   446→        },
+   447→        "default": {"enable": False},
+   448→    },
+   449→    "algorithm": "max",
+   450→}
+   451→
+   452→NVFP4_KV_CFG = {
+   453→    "quant_cfg": {
+   454→        "*[kv]_bmm_quantizer": {
+   455→            "num_bits": (2, 1),
+   456→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   457→            "axis": None,
+   458→            "enable": True,
+   459→        },
+   460→        "default": {"enable": False},
+   461→    },
+   462→    "algorithm": "max",
+   463→}
+   464→
+   465→# Moved from examples/diffusers/quantization/config.py to here
+   466→NVFP4_FP8_MHA_CONFIG = {
+   467→    "quant_cfg": {
+   468→        "*weight_quantizer": {
+   469→            "num_bits": (2, 1),
+   470→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   471→            "axis": None,
+   472→            "enable": True,
+   473→        },
+   474→        "*input_quantizer": {
+   475→            "num_bits": (2, 1),
+   476→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   477→            "axis": None,
+   478→            "enable": True,
+   479→        },
+   480→        "*output_quantizer": {"enable": False},
+   481→        "*q_bmm_quantizer": {
+   482→            "num_bits": (4, 3),
+   483→            "axis": None,
+   484→        },
+   485→        "*k_bmm_quantizer": {
+   486→            "num_bits": (4, 3),
+   487→            "axis": None,
+   488→        },
+   489→        "*v_bmm_quantizer": {
+   490→            "num_bits": (4, 3),
+   491→            "axis": None,
+   492→        },
+   493→        "*softmax_quantizer": {
+   494→            "num_bits": (4, 3),
+   495→            "axis": None,
+   496→        },
+   497→        "transformer_blocks*bmm2_output_quantizer": {
+   498→            "num_bits": (4, 3),
+   499→            "axis": None,
+   500→        },
+   501→        "default": {"enable": False},
+   502→    },
+   503→    "algorithm": "max",
+   504→}
+   505→
+   506→NVFP4_KV_ROTATE_CFG = {
+   507→    "quant_cfg": {
+   508→        "*q_bmm_quantizer": {
+   509→            "enable": False,
+   510→            "rotate": True,
+   511→        },
+   512→        "*k_bmm_quantizer": {
+   513→            "num_bits": (2, 1),
+   514→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   515→            "axis": None,
+   516→            "enable": True,
+   517→            "rotate": True,
+   518→        },
+   519→        "*v_bmm_quantizer": {
+   520→            "num_bits": (2, 1),
+   521→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   522→            "axis": None,
+   523→            "enable": True,
+   524→        },
+   525→    },
+   526→    "algorithm": "max",
+   527→}
+   528→
+   529→NVFP4_SVDQUANT_DEFAULT_CFG = {
+   530→    "quant_cfg": {
+   531→        "*weight_quantizer": {
+   532→            "num_bits": (2, 1),
+   533→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   534→            "axis": None,
+   535→            "enable": True,
+   536→        },
+   537→        "*input_quantizer": {
+   538→            "num_bits": (2, 1),
+   539→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   540→            "axis": None,
+   541→            "enable": True,
+   542→        },
+   543→        **_default_disabled_quantizer_cfg,
+   544→    },
+   545→    "algorithm": {"method": "svdquant", "lowrank": 32},
+   546→}
+   547→
+   548→W4A8_NVFP4_FP8_CFG = {
+   549→    "quant_cfg": {
+   550→        "*weight_quantizer": {
+   551→            "num_bits": (2, 1),
+   552→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (4, 3)},
+   553→            "axis": None,
+   554→            "enable": True,
+   555→        },
+   556→        "*input_quantizer": {
+   557→            "num_bits": (4, 3),
+   558→            "axis": None,
+   559→            "enable": True,
+   560→        },
+   561→        **_default_disabled_quantizer_cfg,
+   562→    },
+   563→    "algorithm": "max",
+   564→}
+   565→
+   566→MXFP4_MLP_WEIGHT_ONLY_CFG = {
+   567→    "quant_cfg": {
+   568→        "*mlp*weight_quantizer": {
+   569→            "num_bits": (2, 1),
+   570→            "block_sizes": {-1: 32, "type": "dynamic", "scale_bits": (8, 0)},
+   571→            "enable": True,
+   572→            "pass_through_bwd": True,
+   573→        },
+   574→        **_default_disabled_quantizer_cfg,
+   575→    },
+   576→    "algorithm": None,
+   577→}
+   578→
+   579→NVFP4_MLP_WEIGHT_ONLY_CFG = {
+   580→    "quant_cfg": {
+   581→        "*mlp*weight_quantizer": {
+   582→            "num_bits": (2, 1),
+   583→            "block_sizes": {
+   584→                -1: 32,
+   585→                "type": "dynamic",
+   586→                "scale_bits": (4, 3),
+   587→            },  # Note: block_size is 32 here
+   588→            "enable": True,
+   589→            "pass_through_bwd": True,
+   590→        },
+   591→        **_default_disabled_quantizer_cfg,
+   592→    },
+   593→    "algorithm": "max",
+   594→}
+   595→
+   596→NVFP4_MLP_ONLY_CFG = {
+   597→    "quant_cfg": {
+   598→        "*mlp*weight_quantizer": {
+   599→            "num_bits": (2, 1),
+   600→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   601→            "enable": True,
+   602→            "pass_through_bwd": True,
+   603→        },
+   604→        "*mlp*input_quantizer": {
+   605→            "num_bits": (2, 1),
+   606→            "block_sizes": {-1: 16, "type": "dynamic", "scale_bits": (4, 3)},
+   607→            "enable": True,
+   608→            "pass_through_bwd": True,
+   609→        },
+   610→        **_default_disabled_quantizer_cfg,
+   611→    },
+   612→    "algorithm": "max",
+   613→}
+   614→
+   615→choices: set[str] = {
+   616→    "FP8_2D_BLOCKWISE_WEIGHT_ONLY_CFG",
+   617→    "FP8_AFFINE_KV_CFG",
+   618→    "FP8_DEFAULT_CFG",
+   619→    "FP8_KV_CFG",
+   620→    "FP8_PER_CHANNEL_PER_TOKEN_CFG",
+   621→    "INT4_AWQ_CFG",
+   622→    "INT4_BLOCKWISE_WEIGHT_ONLY_CFG",
+   623→    "INT8_DEFAULT_CFG",
+   624→    "INT8_SMOOTHQUANT_CFG",
+   625→    "MXFP4_DEFAULT_CFG",
+   626→    "MXFP8_DEFAULT_CFG",
+   627→    "MXINT8_DEFAULT_CFG",
+   628→    "NVFP4_AFFINE_KV_CFG",
+   629→    "NVFP4_AWQ_CLIP_CFG",
+   630→    "NVFP4_AWQ_FULL_CFG",
+   631→    "NVFP4_AWQ_LITE_CFG",
+   632→    "NVFP4_DEFAULT_CFG",
+   633→    "NVFP4_FP8_MHA_CONFIG",
+   634→    "NVFP4_KV_CFG",
+   635→    "NVFP4_KV_ROTATE_CFG",
+   636→    "W4A8_NVFP4_FP8_CFG",
+   637→    "NVFP4_SVDQUANT_DEFAULT_CFG",
+   638→    "W4A8_AWQ_BETA_CFG",
+   639→    "W4A8_MXFP4_FP8_CFG",
+   640→    "NVFP4_MLP_WEIGHT_ONLY_CFG",
+   641→    "MXFP4_MLP_WEIGHT_ONLY_CFG",
+   642→    "NVFP4_MLP_ONLY_CFG",
+   643→}
+   644→
+   645→BiasType = Literal["static", "dynamic"]
+   646→BiasMethod = Literal["mean", "max_min"]
+   647→
+   648→
+   649→class QuantizerAttributeConfig(ModeloptBaseConfig):
+   650→    """Quantizer attribute type."""
+   651→
+   652→    enable: bool = ModeloptField(
+   653→        default=True,
+   654→        title="Enable quantizer.",
+   655→        description="""If True, enables the quantizer. If False, by-pass the quantizer and returns the input tensor.""",
+   656→    )
+   657→
+   658→    num_bits: int | tuple[int, int] = ModeloptField(
+   659→        default=8,
+   660→        title="An integer or a tuple of two integers specifying the number of quantization bits.",
+   661→        description="""`num_bits` can be:
+   662→
+   663→        #. A positive integer argument for integer quantization. `num_bits` specify
+   664→            the number of bits used for integer quantization.
+   665→
+   666→        #. Constant integer tuple (E,M) for floating point quantization emulating
+   667→            Nvidia's FPx quantization. E is the number of exponent bits and M is the number
+   668→            of mantissa bits. Supported FPx quantization formats: FP8 (E4M3, E5M2), FP6(E3M2, E2M3), FP4(E2M1).""",
+   669→    )
+   670→
+   671→    @model_validator(mode="before")
+   672→    @classmethod
+   673→    def validate_config(cls, values):
+   674→        """Validate quantizer config."""
+   675→
+   676→        def _validate_recursive(value):
+   677→            """Recursively validate config structure."""
+   678→            if value is None:
+   679→                return
+   680→
+   681→            if isinstance(value, list):
+   682→                for item in value:
+   683→                    _validate_recursive(item)
+   684→            elif isinstance(value, dict):
+   685→                if len(value) == 1 and "enable" in value and value["enable"] is True:
+   686→                    raise ValueError(
+   687→                        "Invalid quantizer config: Cannot specify only {'enable': True}. "
+   688→                        "Additional parameters are required when enabling quantization."
+   689→                    )
+   690→                # Recurse into nested dicts
+   691→                for v in value.values():
+   692→                    _validate_recursive(v)
+   693→
+   694→        _validate_recursive(values)
+   695→        return values
+   696→
+   697→    @model_validator(mode="after")
+   698→    def validate_num_bits(self):
+   699→        """Validate `num_bits`."""
+   700→        num_bits = self.num_bits
+   701→
+   702→        if isinstance(num_bits, int) and num_bits < 1:
+   703→            raise ValueError("num_bits must be a positive integer or a tuple of positive integers.")
+   704→
+   705→        if not isinstance(num_bits, tuple):
+   706→            return self
+   707→
+   708→        if not all(x > 0 for x in num_bits):
+   709→            raise ValueError("num_bits must be a positive integer or a tuple of positive integers.")
+   710→
+   711→        block_sizes = self.block_sizes
+   712→        if num_bits not in [
+   713→            (4, 3),
+   714→            (5, 2),
+   715→            (2, 1),
+   716→            (1, 2),
+   717→            (0, 3),
+   718→            (3, 0),
+   719→            (3, 2),
+   720→            (2, 3),
+   721→        ]:
+   722→            raise ValueError(
+   723→                "Supported FPx quantization formats: FP8 (E4M3, E5M2), FP6(E3M2, E2M3), FP4(E2M1)."
+   724→            )
+   725→        elif num_bits != (4, 3) and (
+   726→            block_sizes is None or block_sizes.get("type", None) != "dynamic"
+   727→        ):
+   728→            raise ValueError(
+   729→                "Only blockwise dynamic quantization is supported with quantization "
+   730→                "formats E{num_bis[0]}M{num_bits[1]}."
+   731→            )
+   732→        return self
+   733→
+   734→    axis: int | tuple[int, ...] | None = ModeloptField(
+   735→        default=None,
+   736→        title="None, integer or a tuple of integers specifying the axis to quantize.",
+   737→        description="""This field is for static per-channel quantization. *It cannot coexist with `block_sizes`*.
+   738→            You should set axis if you want a fixed shape of scale factor.
+   739→
+   740→            For example, if axis is set to None, the scale factor will be a scalar (per-tensor quantization)
+   741→            if the axis is set to 0, the scale factor will be a vector of shape (dim0, ) (per-channel quantization).
+   742→            if the axis is set to (-2, -1), the scale factor will be a vector of shape (dim-2, dim-1)
+   743→
+   744→            axis value must be in the range [-rank(input_tensor), rank(input_tensor))
+   745→        """,
+   746→    )
+   747→
+   748→    fake_quant: bool = ModeloptField(
+   749→        default=True,
+   750→        title="Enable fake quantization.",
+   751→        description="""If True, enable fake quantization.""",
+   752→    )
+   753→
+   754→    unsigned: bool = ModeloptField(
+   755→        default=False,
+   756→        title="Enable unsigned quantization.",
+   757→        description="""If True, enable unsigned quantization. Used only for integer quantization.""",
+   758→    )
+   759→
+   760→    narrow_range: bool = ModeloptField(
+   761→        default=False,
+   762→        title="Enable narrow range quantization.",
+   763→        description="""If True, enable narrow range quantization. Used only for integer quantization.""",
+   764→    )
+   765→
+   766→    learn_amax: bool = ModeloptField(
+   767→        default=False,
+   768→        title="Enable learning amax.",
+   769→        description="""``learn_amax`` is deprecated and reserved for backward compatibility.""",
+   770→    )
+   771→
+   772→    @field_validator("learn_amax")
+   773→    @classmethod
+   774→    def validate_learn_amax(cls, v):
+   775→        """Validate learn_amax."""
+   776→        assert v is not True, "learn_amax is deprecated and reserved for backward compatibility."
+   777→        return v
+   778→
+   779→    type: str = ModeloptField(
+   780→        default="static",
+   781→        title="""Specify whether the quantization is static or dynamic.""",
+   782→        description="""The value is a string from ``["static", "dynamic"]``.
+   783→            If ``"dynamic"``, dynamic quantization will be enabled which does not collect any statistics during
+   784→            calibration.""",
+   785→        pattern=r"^static$|^dynamic$",
+   786→    )
+   787→
+   788→    block_sizes: dict[int | str, int | tuple[int, int] | str | dict[int, int] | None] | None = (
+   789→        ModeloptField(
+   790→            default=None,
+   791→            title="Optional dictionary specifying block quantization parameters.",
+   792→            description="""This field is for static or dynamic block quantization. *It cannot coexist with ``axis``*.
+   793→            You should set block_sizes if you want fixed number of elements to share every scale factor.
+   794→
+   795→            The keys are the axes for block quantization and the
+   796→            values are block sizes for quantization along the respective axes. Keys must be in the
+   797→            range ``[-tensor.dim(), tensor.dim())``. Values, which are the block sizes for quantization must be
+   798→            positive integers or ``None``. A positive block size specifies the block size for quantization along that
+   799→            axis. ``None`` means that the block size will be the maximum possible size in that dimension - this is
+   800→            useful for specifying certain quantization formats such per-token dynamic quantization which has the `amax`
+   801→            shared along the last dimension.
+   802→
+   803→            In addition, there can be special string keys ``"type"``, ``"scale_bits"`` and ``"scale_block_sizes"``.
+   804→
+   805→            Key ``"type"`` should map to ``"dynamic"`` or ``"static"`` where ``"dynamic"``
+   806→            indicates dynamic block quantization and "static"
+   807→            indicates static calibrated block quantization. By default, the type is ``"static"``.
+   808→
+   809→            Key ``"scale_bits"`` specify the quantization bits for the per-block quantization scale factor
+   810→            (i.e a double quantization scheme).
+   811→
+   812→            Key ``"scale_block_sizes"`` specify the block size for double quantization.
+   813→            By default per-block quantization scale is not quantized.
+   814→
+   815→            For example, ``block_sizes = {-1: 32}`` will quantize the last axis of the input tensor in
+   816→            blocks of size 32 with static calibration, with a total of ``numel(tensor) / 32`` scale factors.
+   817→            ``block_sizes = {-1: 32, "type": "dynamic"}`` will perform dynamic block quantization.
+   818→            ``block_sizes = {-1: None, "type": "dynamic"}`` can be used to
+   819→            specify per-token dynamic quantization.
+   820→        """,
+   821→        )
+   822→    )
+   823→
+   824→    bias: dict[int | str, BiasType | BiasMethod | tuple[int, ...] | bool | int | None] | None = (
+   825→        ModeloptField(
+   826→            default=None,
+   827→            title="Bias configuration.",
+   828→            description="""Configuration for bias handling in affine quantization. The keys are:
+   829→            - "enable": Boolean to enable/disable bias handling, default is False
+   830→            - "type": Specify the type of bias ["static", "dynamic"], default is "static"
+   831→            - "method": Specify the method of bias calibration ["mean", "max_min"], default is "mean"
+   832→            - "axis": Tuple of integers specifying axes for bias computation, default is None
+   833→
+   834→            Examples:
+   835→            bias = {"enable": True}
+   836→            bias = {"enable": True, "type": "static", "axis": -1}
+   837→            bias = {"enable": True, "type": "dynamic", "axis": (-1, -3)}
+   838→        """,
+   839→        )
+   840→    )
+   841→
+   842→    @staticmethod
+   843→    def _get_block_quant_axes_and_sizes(block_sizes):
+   844→        if block_sizes is None:
+   845→            return None
+   846→        return {
+   847→            k: v
+   848→            for k, v in block_sizes.items()
+   849→            if k not in ["type", "scale_bits", "scale_block_sizes"]
+   850→        }
+   851→
+   852→    @field_validator("block_sizes")
+   853→    @classmethod
+   854→    def validate_block_sizes(cls, v, info: ValidationInfo):
+   855→        """Validate block sizes."""
+   856→        if v is None:
+   857→            return v
+   858→        assert info.data["axis"] is None, "axis must be None when block_sizes is not None."
+   859→        if v.get("type", None) == "dynamic":
+   860→            assert len(cls._get_block_quant_axes_and_sizes(v)) == 1, (
+   861→                "Dynamic block quantization only supports quantization last axis."
+   862→            )
+   863→        for _k, _v in v.items():
+   864→            if isinstance(_k, str):
+   865→                assert _k in ["type", "scale_bits", "scale_block_sizes"]
+   866→            else:
+   867→                assert isinstance(_k, int) and (_v is None or isinstance(_v, int))
+   868→        return v
+   869→
+   870→    @field_validator("bias")
+   871→    @classmethod
+   872→    def validate_bias(cls, v):
+   873→        """Validate bias."""
+   874→        if v is None:
+   875→            return v
+   876→
+   877→        if "type" in v and v["type"] not in ["static", "dynamic"]:
+   878→            raise ValueError(f"Invalid bias type: {v['type']}, expected 'static' or 'dynamic'")
+   879→
+   880→        if "method" in v and v["method"] not in ["mean", "max_min"]:
+   881→            raise ValueError(f"Invalid bias method: {v['method']}, expected 'mean' or 'max_min'")
+   882→
+   883→        axis = [k for k in v.keys() if k not in ["type", "method"]]  # noqa: SIM118
+   884→        assert len(axis) > 0, "The axis for bias computation is not specified."
+   885→        for x in axis:
+   886→            if not isinstance(x, int):
+   887→                raise ValueError(f"Invalid axis type {type(axis)}, expected int")
+   888→
+   889→        return v
+   890→
+   891→    trt_high_precision_dtype: str = ModeloptField(
+   892→        default="Float",
+   893→        title="TRT StronglyType requires all weights and amax to be in the same dtype.",
+   894→        description="""The value is a string from ``["Float", "Half", "BFloat16"]``.
+   895→            The QDQs will be assigned the appropriate data type, and this variable will only be
+   896→            used when the user is exporting the quantized ONNX model.""",
+   897→        pattern=r"^Float$|^Half$|^BFloat16$",
+   898→    )
+   899→
+   900→    calibrator: str | ConstructorLike = ModeloptField(
+   901→        default="max",
+   902→        title="""Specify the calibrator to use.""",
+   903→        description="""The calibrator can be a string from ``["max", "histogram"]`` or a constructor
+   904→        to create a calibrator which subclasses :class:`_Calibrator <modelopt.torch.quantization.calib._Calibrator>`.
+   905→        See :meth:`standardize_constructor_args <modelopt.torch.utils.network.standardize_constructor_args>`
+   906→        for more information on how to specify the constructor.""",
+   907→    )
+   908→
+   909→    @field_validator("calibrator")
+   910→    @classmethod
+   911→    def validate_calibrator(cls, v, info: ValidationInfo):
+   912→        """Validate calibrator."""
+   913→        if isinstance(v, str):
+   914→            assert v in ["max", "histogram"]
+   915→        return v
+   916→
+   917→    rotate: bool = ModeloptField(
+   918→        default=False,
+   919→        title="""If rotate the input before quantization.""",
+   920→        description=""""If true, the input of the quantizer will be rotated with a hadamard matrix
+   921→        given by scipy.linalg.hadamard, i.e.
+   922→        ``input = input @ scipy.linalg.hadamard(input.shape[-1]) / sqrt(input.shape[-1])``.
+   923→
+   924→        This can be used for ratation based PTQ methods, e.g. QuaRot or SpinQuant.
+   925→        See https://arxiv.org/abs/2404.00456 for example.""",
+   926→    )
+   927→
+   928→    pass_through_bwd: bool = ModeloptField(
+   929→        default=False,
+   930→        title="If set to true, fake quantization will be a pass through for gradient computation.",
+   931→        description="""
+   932→        Gradient computation where fake quantization is pass through is called
+   933→        'Straight-Through Estimator (STE)'. STE does not require saving of the input tensor for
+   934→        performing backward pass and hence consumes less memory.
+   935→
+   936→        If set to False, we will use STE with zeroed outlier gradients. This setting could
+   937→        yield better QAT accuracy depending on the quantization format. However, this setting
+   938→        requires saving of the input tensor for computing gradients which uses more memory.
+   939→
+   940→        For dynamic quantization formats like MXFP4, STE with zeroed outlier gradients
+   941→        is not needed since fake quantization with dynamic amax results in minimal/no clipping.
+   942→        """,
+   943→    )
+   944→
+   945→
+   946→class QuantizeAlgorithmConfig(ModeloptBaseConfig):
+   947→    """Calibration algorithm config base."""
+   948→
+   949→    method: Literal[None] = ModeloptField(
+   950→        None,
+   951→        title="This field specifies the name of the calibration algorithm. If None, no calibration is performed.",
+   952→    )
+   953→
+   954→
+   955→class MaxCalibConfig(QuantizeAlgorithmConfig):
+   956→    """The config for max calibration algorithm.
+   957→
+   958→    Max calibration estimates max values of activations or weights and use this max values
+   959→    to set the quantization scaling factor.
+   960→    See `Integer Quantization <https://arxiv.org/pdf/2004.09602>`_ for the concepts.
+   961→    """
+   962→
+   963→    method: Literal["max"] = ModeloptField("max")
+   964→
+   965→    distributed_sync: bool | None = ModeloptField(
+   966→        default=True,
+   967→        title="Whether to sync the amax across the distributed processes.",
+   968→        description="If True, the amax will be synced across the distributed processes.",
+   969→    )
+   970→
+   971→
+   972→class SmoothQuantCalibConfig(QuantizeAlgorithmConfig):
+   973→    """The config for ``smoothquant`` algorithm (SmoothQuant).
+   974→
+   975→    SmoothQuant applies a smoothing factor which balances the scale of outliers in weights and activations.
+   976→    See `SmoothQuant paper <https://arxiv.org/pdf/2211.10438>`_ for more details.
+   977→    """
+   978→
+   979→    method: Literal["smoothquant"] = ModeloptField("smoothquant")
+   980→
+   981→    alpha: float | None = ModeloptField(
+   982→        default=1.0,
+   983→        ge=0.0,
+   984→        le=1.0,
+   985→        title="SmoothQuant hyper-parameter alpha.",
+   986→        description=(
+   987→            "This hyper-parameter controls the migration strength."
+   988→            "The migration strength is within [0, 1], "
+   989→            "a larger value migrates more quantization difficulty to weights."
+   990→        ),
+   991→    )
+   992→
+   993→
+   994→class AWQLiteCalibConfig(QuantizeAlgorithmConfig):
+   995→    """The config for ``awq_lite`` (AWQ lite) algorithm.
+   996→
+   997→    AWQ lite applies a channel-wise scaling factor which minimizes the output difference after quantization.
+   998→    See `AWQ paper <https://arxiv.org/pdf/2306.00978>`_ for more details.
+   999→    """
+  1000→
+  1001→    method: Literal["awq_lite"] = ModeloptField("awq_lite")
+  1002→
+  1003→    alpha_step: float | None = ModeloptField(
+  1004→        default=0.1,
+  1005→        gt=0.0,
+  1006→        le=1.0,
+  1007→        title="Step size for the searching alpha.",
+  1008→        description="The alpha will be searched from 0 to 1 with the step size specified.",
+  1009→    )
+  1010→
+  1011→    debug: bool | None = ModeloptField(
+  1012→        default=False,
+  1013→        title="Debug mode.",
+  1014→        description="If True, module's search metadata will be kept as a module attribute named `awq_lite`.",
+  1015→    )
+  1016→
+  1017→
+  1018→class AWQClipCalibConfig(QuantizeAlgorithmConfig):
+  1019→    """The config for ``awq_clip`` (AWQ clip) algorithm.
+  1020→
+  1021→    AWQ clip searches clipped amax for per-group quantization, This search requires much more compute
+  1022→    compared to AWQ lite. To avoid any OOM, the linear layer weights are batched along the ``out_features``
+  1023→    dimension of batch size ``max_co_batch_size``. AWQ clip calibration also takes longer than AWQ lite.
+  1024→    """
+  1025→
+  1026→    method: Literal["awq_clip"] = ModeloptField("awq_clip")
+  1027→
+  1028→    max_co_batch_size: int | None = ModeloptField(
+  1029→        default=1024,
+  1030→        title="Maximum output channel batch size while searching clip values.",
+  1031→        description="Reduce this number if CUDA Out of Memory error occurs.",
+  1032→    )
+  1033→
+  1034→    max_tokens_per_batch: int | None = ModeloptField(
+  1035→        default=64,
+  1036→        title="Maximum tokens per batch while searching clip values.",
+  1037→        description="""The total tokens used for clip search would be ``max_tokens_per_batch * number of batches``.
+  1038→        Original AWQ uses a total of 512 tokens to search for clip values.""",
+  1039→    )
+  1040→
+  1041→    min_clip_ratio: float | None = ModeloptField(
+  1042→        default=0.5,
+  1043→        gt=0.0,
+  1044→        lt=1.0,
+  1045→        title="Minimum clip ratio to search for.",
+  1046→        description="""It should be in (0, 1.0). Clip will search for the optimal clipping value in the range
+  1047→        ``[original block amax * min_clip_ratio, original block amax]``.""",
+  1048→    )
+  1049→
+  1050→    shrink_step: float | None = ModeloptField(
+  1051→        default=0.05,
+  1052→        gt=0.0,
+  1053→        le=1.0,
+  1054→        title="Step size to search for clip values.",
+  1055→        description="""It should be in range (0, 1.0]. The clip ratio will be searched from ``min_clip_ratio`` to 1
+  1056→        with the step size specified.""",
+  1057→    )
+  1058→
+  1059→    debug: bool | None = ModeloptField(
+  1060→        default=False,
+  1061→        title="Debug mode.",
+  1062→        description="If True, module's search metadata will be kept as a module attribute named ``awq_clip``.",
+  1063→    )
+  1064→
+  1065→
+  1066→class AWQFullCalibConfig(AWQLiteCalibConfig, AWQClipCalibConfig):
+  1067→    """The config for ``awq`` or ``awq_full`` algorithm (AWQ full).
+  1068→
+  1069→    AWQ full performs ``awq_lite`` followed by ``awq_clip``.
+  1070→    """
+  1071→
+  1072→    method: Literal["awq_full"] = ModeloptField("awq_full")
+  1073→
+  1074→    debug: bool | None = ModeloptField(
+  1075→        default=False,
+  1076→        title="Debug mode.",
+  1077→        description=(
+  1078→            "If True, module's search metadata will be kept as "
+  1079→            "module attributes named ``awq_lite`` and ``awq_clip``."
+  1080→        ),
+  1081→    )
+  1082→
+  1083→
+  1084→class SVDQuantConfig(QuantizeAlgorithmConfig):
+  1085→    """The config for SVDQuant.
+  1086→
+  1087→    Refer to the `SVDQuant paper <https://arxiv.org/pdf/2411.05007>`_ for more details.
+  1088→    """
+  1089→
+  1090→    method: Literal["svdquant"] = ModeloptField("svdquant")
+  1091→
+  1092→    lowrank: int | None = ModeloptField(
+  1093→        default=32,
+  1094→        title="Low-rank dimension for the SVD LoRA",
+  1095→        description=(
+  1096→            "Specifies the rank of the LoRA used in the SVDQuant method, "
+  1097→            "which captures outliers from the original weights."
+  1098→        ),
+  1099→    )
+  1100→
+  1101→
+  1102→QuantizeQuantCfgType = dict[
+  1103→    str | Callable,
+  1104→    QuantizerAttributeConfig
+  1105→    | list[QuantizerAttributeConfig]
+  1106→    | dict[str | Callable, QuantizerAttributeConfig | list[QuantizerAttributeConfig]],
+  1107→]
+  1108→
+  1109→_QuantizeAlgoCfgType = str | dict | QuantizeAlgorithmConfig | None
+  1110→
+  1111→QuantizeAlgoCfgType = _QuantizeAlgoCfgType | list[_QuantizeAlgoCfgType] | None
+  1112→
+  1113→
+  1114→class QuantizeConfig(ModeloptBaseConfig):
+  1115→    """Default configuration for ``quantize`` mode."""
+  1116→
+  1117→    quant_cfg: QuantizeQuantCfgType = ModeloptField(
+  1118→        default={"default": {"num_bits": 8, "axis": None}},
+  1119→        title="Quantization configuration",
+  1120→        validate_default=True,
+  1121→    )
+  1122→
+  1123→    algorithm: QuantizeAlgoCfgType = ModeloptField(
+  1124→        default="max",
+  1125→        title="Calibration algorithm, see :meth:`calibrate <modelopt.torch.quantization.model_quant.calibrate>` "
+  1126→        "for more details.",
+  1127→        validate_default=True,
+  1128→    )
+  1129→
+  1130→
+  1131→class CompressConfig(ModeloptBaseConfig):
+  1132→    """Default configuration for ``compress`` mode."""
+  1133→
+  1134→    compress: dict[str, bool] = ModeloptField(
+  1135→        default={"*": True},
+  1136→        title="""Enable weight compression for the given pattern. Default is False for all weights.
+  1137→        Call `compress` function to compress the model weights.""",
+  1138→    )
+  1139→
+  1140→    quant_gemm: bool = ModeloptField(
+  1141→        default=True,
+  1142→        title="Enable quantized GEMM.",
+  1143→        description="If True, quantized GEMM compute will be enabled. Otherwise, we only do weight-only quantization.",
+  1144→    )
+  1145→
+  1146→
+  1147→CompressCfgType = dict[str, bool] | None | CompressConfig
+  1148→
+  1149→
+  1150→class _QuantizeExportConfig(ModeloptBaseConfig):
+  1151→    """An empty config."""
+  1152→
+  1153→
+  1154→def need_calibration(config):
+  1155→    """Check if calibration is needed for the given config."""
+  1156→    if config["algorithm"] is not None and config["algorithm"] != "max":
+  1157→        return True
+  1158→
+  1159→    def _not_dynamic(cfg):
+  1160→        return (
+  1161→            cfg.get("enable", True)
+  1162→            and cfg.get("type", "") != "dynamic"
+  1163→            and cfg.get("*", {}).get("enable", True)
+  1164→        )
+  1165→
+  1166→    for name, cfg in config.get("quant_cfg", {}).items():
+  1167→        if "weight_quantizer" in name:
+  1168→            # We don't calibrate weight quantizer
+  1169→            continue
+  1170→        # quantization like W4A8 has a list of weight quantizers
+  1171→        if isinstance(cfg, list):
+  1172→            for _config in cfg:
+  1173→                if _not_dynamic(_config):
+  1174→                    print(f"{cfg}: True")
+  1175→                    return True
+  1176→        elif _not_dynamic(cfg):
+  1177→            print(f"{cfg}: True")
+  1178→            return True
+  1179→
+  1180→    return False
+  1181→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

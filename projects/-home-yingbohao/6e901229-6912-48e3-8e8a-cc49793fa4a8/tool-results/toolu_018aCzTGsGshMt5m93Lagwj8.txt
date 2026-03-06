@@ -1,0 +1,10 @@
+## 项目结构
+## 关键 CLI 参数（nnscaler_train.py）
+## 核心原则
+## 踩过的坑 & 经验总结
+## 常用命令
+## wandb 信息
+## 训练启动前验证 checklist
+## 会话状态文件
+## 工作模式
+## 预批准命令（.claude/settings.json）

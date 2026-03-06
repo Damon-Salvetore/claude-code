@@ -1,0 +1,7 @@
+-rw-rw-r-- 1 yingbohao yingbohao 4475724 Mar  4 19:48 /home/yingbohao/llm-train/logs/run_all_12.log
+-rw-rw-r-- 1 yingbohao yingbohao 2114741 Mar  4 19:48 /home/yingbohao/llm-train/logs/Base-0.4B-nvfp4.log
+-rw-rw-r-- 1 yingbohao yingbohao 2362511 Mar  4 19:31 /home/yingbohao/llm-train/logs/Base-0.4B-baseline.log
+-rw-rw-r-- 1 yingbohao yingbohao   98089 Mar  4 19:10 /home/yingbohao/llm-train/logs/GatedDiffAttn-0.4B-nvfp4.log
+-rw-rw-r-- 1 yingbohao yingbohao   63696 Mar  4 19:09 /home/yingbohao/llm-train/logs/GatedDiffAttn-0.4B-baseline.log
+-rw-rw-r-- 1 yingbohao yingbohao   12458 Mar  4 19:08 /home/yingbohao/llm-train/logs/DiffAttn-0.4B-nvfp4_full.log
+-rw-rw-r-- 1 yingbohao yingbohao   12679 Mar  4 19:08 /home/yingbohao/llm-train/logs/GatedDiffAttn-0.4B-nvfp4_full.log

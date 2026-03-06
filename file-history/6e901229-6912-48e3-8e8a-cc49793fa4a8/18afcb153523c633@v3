@@ -1,0 +1,161 @@
+import math
+from einops import rearrange
+from typing import Optional, Dict
+
+import torch
+import torch.nn as nn
+from .config import ModelArgs
+import logging
+from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+from einops import rearrange
+from .rotary_embedding import get_rope
+
+from .rms_norm import RMSNorm
+from .linear import MixPrecisionLinear, mix_precision_linear
+from kernel.store_kvcache import store_kvcache
+from kernel.nvfp4_quant import nvfp4_fake_quant
+from kernel.mxfp_quant import mxfp4_fake_quant, mxfp8_fake_quant
+
+import nnscaler
+from nnscaler.customized_ops.ring_attention.ring_attn_varlen import wrap_ring_attn_varlen_func
+
+logger = logging.getLogger(__name__)
+
+@torch.compile
+def glu(x: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+    return x * torch.sigmoid(gate)
+
+@torch.compile
+def diff(attn1: torch.Tensor, attn2: torch.Tensor, lambda_val: torch.Tensor) -> torch.Tensor:
+    return attn1 - torch.sigmoid(lambda_val).unsqueeze(-1) * attn2
+
+nnscaler.register_op('l d, l d -> l d')(glu)
+nnscaler.register_op('l h d^, l h d^, l h -> l h d^')(diff)
+
+class Attention(nn.Module):
+
+    def __init__(self, index: int, args: ModelArgs):
+        super(Attention, self).__init__()
+        self.layer_index = index
+        self.nvfp4_mode = args.nvfp4_mode
+        self.is_self_layer = index < args.n_layers - args.yoco_cross_layers
+        self.dp_sharded = args.dp_sharded
+        self.use_cute = args.use_cute
+        if args.yoco_cross_layers > 0:
+            window_size = args.yoco_window_size if self.is_self_layer else -1
+        else:
+            window_size = -1
+        logger.info(f"Attention layer {index} is_self_layer: {self.is_self_layer}, window_size: {window_size}")
+        self.window_size = (window_size, 0) if window_size > 0 else (-1, -1)
+        self.head_dim = args.head_dim
+        self.kv_head = args.kv_head
+        self.head = args.head if self.is_self_layer else args.cross_head
+        self.rope = get_rope(self.head_dim, self.head_dim, args.max_seq_len, args.rope_theta) if self.is_self_layer else None
+        self.diff_attention = args.diff_attention
+        q_proj_dim = 2 * self.head * self.head_dim if self.diff_attention else self.head * self.head_dim
+        if self.is_self_layer:
+            self.q_proj = MixPrecisionLinear(args.d_model, q_proj_dim, bias=args.attention_bias)
+            self.k_proj = MixPrecisionLinear(args.d_model, self.kv_head * self.head_dim, bias=args.attention_bias)
+            self.v_proj = MixPrecisionLinear(args.d_model, self.kv_head * self.head_dim, bias=args.attention_bias)
+        else:
+            self.q_proj = MixPrecisionLinear(args.d_model, q_proj_dim, bias=args.attention_bias)
+
+        if args.qk_norm and self.is_self_layer:
+            self.q_norm = RMSNorm(self.head_dim, eps=args.norm_eps, elementwise_affine=False)
+            self.k_norm = RMSNorm(self.head_dim, eps=args.norm_eps, elementwise_affine=False)
+        else:
+            self.q_norm = nn.Identity()
+            self.k_norm = nn.Identity()
+
+        self.o_proj = MixPrecisionLinear(self.head * self.head_dim, args.d_model, bias=False)
+        self.gate_proj = MixPrecisionLinear(args.d_model, self.head * self.head_dim, bias=args.attention_bias) if args.gated_attention else None
+        self.lambda_proj = MixPrecisionLinear(args.d_model, self.head, bias=False) if self.diff_attention else None
+        self.init_weights()
+
+    def init_weights(self):
+        nn.init.kaiming_uniform_(self.q_proj.weight, a=math.sqrt(5), mode='fan_in')
+        nn.init.kaiming_uniform_(self.o_proj.weight, a=math.sqrt(5), mode='fan_out')
+        if self.is_self_layer:
+            nn.init.kaiming_uniform_(self.k_proj.weight, a=math.sqrt(5), mode='fan_in')
+            nn.init.kaiming_uniform_(self.v_proj.weight, a=math.sqrt(5), mode='fan_in')
+        if self.gate_proj is not None:
+            nn.init.kaiming_uniform_(self.gate_proj.weight, a=math.sqrt(5), mode='fan_in')
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        context: Dict[str, torch.Tensor],
+        yoco_key: Optional[torch.Tensor] = None,
+        yoco_value: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if self.gate_proj is not None:
+            # elementwise sigmoid-gated attention
+            if self.nvfp4_mode == 3:
+                gate = mix_precision_linear(mxfp8_fake_quant(x), mxfp4_fake_quant(self.gate_proj.weight))
+            elif self.nvfp4_mode >= 2:
+                gate = mix_precision_linear(nvfp4_fake_quant(x), nvfp4_fake_quant(self.gate_proj.weight))
+            else:
+                gate = self.gate_proj(x)
+
+        if self.is_self_layer:
+            if self.nvfp4_mode == 3:
+                # MXFP4(W4) + MXFP8(A8) fake quantization for Q, K, V projections
+                x_fq = mxfp8_fake_quant(x)
+                xq = mix_precision_linear(x_fq, mxfp4_fake_quant(self.q_proj.weight))
+                xk = mix_precision_linear(x_fq, mxfp4_fake_quant(self.k_proj.weight))
+                xv = mix_precision_linear(x_fq, mxfp4_fake_quant(self.v_proj.weight))
+            elif self.nvfp4_mode >= 2:
+                # NVFP4 W4A4 fake quantization for Q, K, V projections
+                x_fq = nvfp4_fake_quant(x)
+                xq = mix_precision_linear(x_fq, nvfp4_fake_quant(self.q_proj.weight))
+                xk = mix_precision_linear(x_fq, nvfp4_fake_quant(self.k_proj.weight))
+                xv = mix_precision_linear(x_fq, nvfp4_fake_quant(self.v_proj.weight))
+            else:
+                xq = self.q_proj(x)
+                xk = self.k_proj(x)
+                xv = self.v_proj(x)
+            xq, xk = map(lambda t: rearrange(t, 'n (h d) -> n h d', d=self.head_dim), (xq, xk))
+            xq, xk = self.q_norm(xq), self.k_norm(xk)
+            xv = rearrange(xv, 'n (h d) -> n h d', d=self.head_dim)
+            xq, xk = self.rope(context['positions'], xq, xk)
+        else:
+            # NoPE global attention for Cross Decoder
+            if self.nvfp4_mode == 3:
+                xq = mix_precision_linear(mxfp8_fake_quant(x), mxfp4_fake_quant(self.q_proj.weight))
+            elif self.nvfp4_mode >= 2:
+                xq = mix_precision_linear(nvfp4_fake_quant(x), nvfp4_fake_quant(self.q_proj.weight))
+            else:
+                xq = self.q_proj(x)
+            xq = rearrange(xq, 'n (h d) -> n h d', d=self.head_dim)
+            if yoco_key is not None and yoco_value is not None:
+                xk, xv = yoco_key, yoco_value
+            # xq, xk = self.q_norm(xq), self.k_norm(xk)
+        if 'kv_cache' in context:
+            if self.is_self_layer:
+                kv_cache = context['kv_cache'][context['layer_index']]
+                store_kvcache(xk, xv, kv_cache[0], kv_cache[1], context['slot_mapping'])
+            else:
+                kv_cache = context['kv_cache'][-1]
+            if 'cache_seqlens' in context:
+                output = flash_attn_with_kvcache(xq.unsqueeze(1), kv_cache[0], kv_cache[1], cache_seqlens=context['cache_seqlens'], window_size=self.window_size, causal=True).squeeze(1)
+            else:
+                output = flash_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], context['max_seqlen_q'], context['max_seqlen_k'], window_size=self.window_size, causal=True)
+            context['layer_index'] += 1
+        else:
+            # max_seqlen_q and max_seqlen_k are not passed since they are dynamic and can be calculated from cu_seqlens
+            output = wrap_ring_attn_varlen_func(xq, xk, xv, context['cu_seqlens_q'], context['cu_seqlens_k'], None, causal=True, window_size=self.window_size, enable_ring=not self.dp_sharded, use_cute=self.use_cute)
+        if self.diff_attention:
+            attn1, attn2 = output[:, 0::2], output[:, 1::2]
+            output = diff(attn1, attn2, self.lambda_proj(x))
+        output = rearrange(output, 'n h d -> n (h d)')
+        if self.gate_proj is not None:
+            output = glu(output, gate)
+        if self.nvfp4_mode == 3:
+            # MXFP4(W4) + MXFP8(A8) fake quantization for O projection
+            output = mix_precision_linear(mxfp8_fake_quant(output), mxfp4_fake_quant(self.o_proj.weight))
+        elif self.nvfp4_mode >= 2:
+            # NVFP4 W4A4 fake quantization for O projection
+            output = mix_precision_linear(nvfp4_fake_quant(output), nvfp4_fake_quant(self.o_proj.weight))
+        else:
+            output = self.o_proj(output)
+        return output

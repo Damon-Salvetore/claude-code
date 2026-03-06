@@ -1,0 +1,174 @@
+     1→{
+     2→  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+     3→  "hooks": {
+     4→    "PreToolUse": [
+     5→      {
+     6→        "matcher": "tool == \"Bash\" && tool_input.command matches \"(npm run dev|pnpm( run)? dev|yarn dev|bun run dev)\"",
+     7→        "hooks": [
+     8→          {
+     9→            "type": "command",
+    10→            "command": "node -e \"console.error('[Hook] BLOCKED: Dev server must run in tmux for log access');console.error('[Hook] Use: tmux new-session -d -s dev \\\"npm run dev\\\"');console.error('[Hook] Then: tmux attach -t dev');process.exit(1)\""
+    11→          }
+    12→        ],
+    13→        "description": "Block dev servers outside tmux - ensures you can access logs"
+    14→      },
+    15→      {
+    16→        "matcher": "tool == \"Bash\" && tool_input.command matches \"(npm (install|test)|pnpm (install|test)|yarn (install|test)?|bun (install|test)|cargo build|make|docker|pytest|vitest|playwright)\"",
+    17→        "hooks": [
+    18→          {
+    19→            "type": "command",
+    20→            "command": "node -e \"if(!process.env.TMUX){console.error('[Hook] Consider running in tmux for session persistence');console.error('[Hook] tmux new -s dev  |  tmux attach -t dev')}\""
+    21→          }
+    22→        ],
+    23→        "description": "Reminder to use tmux for long-running commands"
+    24→      },
+    25→      {
+    26→        "matcher": "tool == \"Bash\" && tool_input.command matches \"git push\"",
+    27→        "hooks": [
+    28→          {
+    29→            "type": "command",
+    30→            "command": "node -e \"console.error('[Hook] Review changes before push...');console.error('[Hook] Continuing with push (remove this hook to add interactive review)')\""
+    31→          }
+    32→        ],
+    33→        "description": "Reminder before git push to review changes"
+    34→      },
+    35→      {
+    36→        "matcher": "tool == \"Write\" && tool_input.file_path matches \"\\\\.(md|txt)$\" && !(tool_input.file_path matches \"README\\\\.md|CLAUDE\\\\.md|AGENTS\\\\.md|CONTRIBUTING\\\\.md\")",
+    37→        "hooks": [
+    38→          {
+    39→            "type": "command",
+    40→            "command": "node -e \"const fs=require('fs');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const p=i.tool_input?.file_path||'';if(/\\.(md|txt)$/.test(p)&&!/(README|CLAUDE|AGENTS|CONTRIBUTING)\\.md$/.test(p)){console.error('[Hook] BLOCKED: Unnecessary documentation file creation');console.error('[Hook] File: '+p);console.error('[Hook] Use README.md for documentation instead');process.exit(1)}console.log(d)})\""
+    41→          }
+    42→        ],
+    43→        "description": "Block creation of random .md files - keeps docs consolidated"
+    44→      },
+    45→      {
+    46→        "matcher": "tool == \"Edit\" || tool == \"Write\"",
+    47→        "hooks": [
+    48→          {
+    49→            "type": "command",
+    50→            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/suggest-compact.js\""
+    51→          }
+    52→        ],
+    53→        "description": "Suggest manual compaction at logical intervals"
+    54→      }
+    55→    ],
+    56→    "PreCompact": [
+    57→      {
+    58→        "matcher": "*",
+    59→        "hooks": [
+    60→          {
+    61→            "type": "command",
+    62→            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/pre-compact.js\""
+    63→          }
+    64→        ],
+    65→        "description": "Save state before context compaction"
+    66→      }
+    67→    ],
+    68→    "SessionStart": [
+    69→      {
+    70→        "matcher": "*",
+    71→        "hooks": [
+    72→          {
+    73→            "type": "command",
+    74→            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/session-start.js\""
+    75→          }
+    76→        ],
+    77→        "description": "Load previous context and detect package manager on new session"
+    78→      }
+    79→    ],
+    80→    "PostToolUse": [
+    81→      {
+    82→        "matcher": "tool == \"Bash\"",
+    83→        "hooks": [
+    84→          {
+    85→            "type": "command",
+    86→            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const cmd=i.tool_input?.command||'';if(/gh pr create/.test(cmd)){const out=i.tool_output?.output||'';const m=out.match(/https:\\/\\/github.com\\/[^/]+\\/[^/]+\\/pull\\/\\d+/);if(m){console.error('[Hook] PR created: '+m[0]);const repo=m[0].replace(/https:\\/\\/github.com\\/([^/]+\\/[^/]+)\\/pull\\/\\d+/,'$1');const pr=m[0].replace(/.*\\/pull\\/(\\d+)/,'$1');console.error('[Hook] To review: gh pr review '+pr+' --repo '+repo)}}console.log(d)})\""
+    87→          }
+    88→        ],
+    89→        "description": "Log PR URL and provide review command after PR creation"
+    90→      },
+    91→      {
+    92→        "matcher": "tool == \"Bash\" && tool_input.command matches \"(npm run build|pnpm build|yarn build)\"",
+    93→        "hooks": [
+    94→          {
+    95→            "type": "command",
+    96→            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{console.error('[Hook] Build completed - async analysis running in background');console.log(d)})\"",
+    97→            "async": true,
+    98→            "timeout": 30
+    99→          }
+   100→        ],
+   101→        "description": "Example: async hook for build analysis (runs in background without blocking)"
+   102→      },
+   103→      {
+   104→        "matcher": "tool == \"Edit\" && tool_input.file_path matches \"\\\\.(ts|tsx|js|jsx)$\"",
+   105→        "hooks": [
+   106→          {
+   107→            "type": "command",
+   108→            "command": "node -e \"const{execFileSync}=require('child_process');const fs=require('fs');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const p=i.tool_input?.file_path;if(p&&fs.existsSync(p)){try{execFileSync('npx',['prettier','--write',p],{stdio:['pipe','pipe','pipe']})}catch(e){}}console.log(d)})\""
+   109→          }
+   110→        ],
+   111→        "description": "Auto-format JS/TS files with Prettier after edits"
+   112→      },
+   113→      {
+   114→        "matcher": "tool == \"Edit\" && tool_input.file_path matches \"\\\\.(ts|tsx)$\"",
+   115→        "hooks": [
+   116→          {
+   117→            "type": "command",
+   118→            "command": "node -e \"const{execSync}=require('child_process');const fs=require('fs');const path=require('path');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const p=i.tool_input?.file_path;if(p&&fs.existsSync(p)){let dir=path.dirname(p);while(dir!==path.dirname(dir)&&!fs.existsSync(path.join(dir,'tsconfig.json'))){dir=path.dirname(dir)}if(fs.existsSync(path.join(dir,'tsconfig.json'))){try{const r=execSync('npx tsc --noEmit --pretty false 2>&1',{cwd:dir,encoding:'utf8',stdio:['pipe','pipe','pipe']});const lines=r.split('\\n').filter(l=>l.includes(p)).slice(0,10);if(lines.length)console.error(lines.join('\\n'))}catch(e){const lines=(e.stdout||'').split('\\n').filter(l=>l.includes(p)).slice(0,10);if(lines.length)console.error(lines.join('\\n'))}}}console.log(d)})\""
+   119→          }
+   120→        ],
+   121→        "description": "TypeScript check after editing .ts/.tsx files"
+   122→      },
+   123→      {
+   124→        "matcher": "tool == \"Edit\" && tool_input.file_path matches \"\\\\.(ts|tsx|js|jsx)$\"",
+   125→        "hooks": [
+   126→          {
+   127→            "type": "command",
+   128→            "command": "node -e \"const fs=require('fs');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const p=i.tool_input?.file_path;if(p&&fs.existsSync(p)){const c=fs.readFileSync(p,'utf8');const lines=c.split('\\n');const matches=[];lines.forEach((l,idx)=>{if(/console\\.log/.test(l))matches.push((idx+1)+': '+l.trim())});if(matches.length){console.error('[Hook] WARNING: console.log found in '+p);matches.slice(0,5).forEach(m=>console.error(m));console.error('[Hook] Remove console.log before committing')}}console.log(d)})\""
+   129→          }
+   130→        ],
+   131→        "description": "Warn about console.log statements after edits"
+   132→      }
+   133→    ],
+   134→    "Stop": [
+   135→      {
+   136→        "matcher": "*",
+   137→        "hooks": [
+   138→          {
+   139→            "type": "command",
+   140→            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/check-console-log.js\""
+   141→          }
+   142→        ],
+   143→        "description": "Check for console.log in modified files after each response"
+   144→      }
+   145→    ],
+   146→    "SessionEnd": [
+   147→      {
+   148→        "matcher": "*",
+   149→        "hooks": [
+   150→          {
+   151→            "type": "command",
+   152→            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/session-end.js\""
+   153→          }
+   154→        ],
+   155→        "description": "Persist session state on end"
+   156→      },
+   157→      {
+   158→        "matcher": "*",
+   159→        "hooks": [
+   160→          {
+   161→            "type": "command",
+   162→            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/evaluate-session.js\""
+   163→          }
+   164→        ],
+   165→        "description": "Evaluate session for extractable patterns"
+   166→      }
+   167→    ]
+   168→  }
+   169→}
+   170→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

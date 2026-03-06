@@ -1,0 +1,9 @@
+REDIRECT DETECTED: The URL redirects to a different host.
+
+Original URL: https://docs.anthropic.com/en/docs/claude-code/cli-usage
+Redirect URL: https://code.claude.com/docs/en/cli-usage
+Status: 301 Moved Permanently
+
+To complete your request, I need to fetch content from the redirected URL. Please use WebFetch again with these parameters:
+- url: "https://code.claude.com/docs/en/cli-usage"
+- prompt: "List all built-in slash commands in Claude Code, especially /batch if it exists. What does each command do?"

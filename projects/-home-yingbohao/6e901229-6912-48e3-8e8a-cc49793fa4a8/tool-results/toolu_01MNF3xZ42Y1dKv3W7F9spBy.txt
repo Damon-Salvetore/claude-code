@@ -1,0 +1,435 @@
+     1→# The Shorthand Guide to Everything Claude Code
+     2→
+     3→![Header: Anthropic Hackathon Winner - Tips & Tricks for Claude Code](./assets/images/shortform/00-header.png)
+     4→
+     5→---
+     6→
+     7→**Been an avid Claude Code user since the experimental rollout in Feb, and won the Anthropic x Forum Ventures hackathon with [zenith.chat](https://zenith.chat) alongside [@DRodriguezFX](https://x.com/DRodriguezFX) - completely using Claude Code.**
+     8→
+     9→Here's my complete setup after 10 months of daily use: skills, hooks, subagents, MCPs, plugins, and what actually works.
+    10→
+    11→---
+    12→
+    13→## Skills and Commands
+    14→
+    15→Skills operate like rules, constricted to certain scopes and workflows. They're shorthand to prompts when you need to execute a particular workflow.
+    16→
+    17→After a long session of coding with Opus 4.5, you want to clean out dead code and loose .md files? Run `/refactor-clean`. Need testing? `/tdd`, `/e2e`, `/test-coverage`. Skills can also include codemaps - a way for Claude to quickly navigate your codebase without burning context on exploration.
+    18→
+    19→![Terminal showing chained commands](./assets/images/shortform/02-chaining-commands.jpeg)
+    20→*Chaining commands together*
+    21→
+    22→Commands are skills executed via slash commands. They overlap but are stored differently:
+    23→
+    24→- **Skills**: `~/.claude/skills/` - broader workflow definitions
+    25→- **Commands**: `~/.claude/commands/` - quick executable prompts
+    26→
+    27→```bash
+    28→# Example skill structure
+    29→~/.claude/skills/
+    30→  pmx-guidelines.md      # Project-specific patterns
+    31→  coding-standards.md    # Language best practices
+    32→  tdd-workflow/          # Multi-file skill with README.md
+    33→  security-review/       # Checklist-based skill
+    34→```
+    35→
+    36→---
+    37→
+    38→## Hooks
+    39→
+    40→Hooks are trigger-based automations that fire on specific events. Unlike skills, they're constricted to tool calls and lifecycle events.
+    41→
+    42→**Hook Types:**
+    43→
+    44→1. **PreToolUse** - Before a tool executes (validation, reminders)
+    45→2. **PostToolUse** - After a tool finishes (formatting, feedback loops)
+    46→3. **UserPromptSubmit** - When you send a message
+    47→4. **Stop** - When Claude finishes responding
+    48→5. **PreCompact** - Before context compaction
+    49→6. **Notification** - Permission requests
+    50→
+    51→**Example: tmux reminder before long-running commands**
+    52→
+    53→```json
+    54→{
+    55→  "PreToolUse": [
+    56→    {
+    57→      "matcher": "tool == \"Bash\" && tool_input.command matches \"(npm|pnpm|yarn|cargo|pytest)\"",
+    58→      "hooks": [
+    59→        {
+    60→          "type": "command",
+    61→          "command": "if [ -z \"$TMUX\" ]; then echo '[Hook] Consider tmux for session persistence' >&2; fi"
+    62→        }
+    63→      ]
+    64→    }
+    65→  ]
+    66→}
+    67→```
+    68→
+    69→![PostToolUse hook feedback](./assets/images/shortform/03-posttooluse-hook.png)
+    70→*Example of what feedback you get in Claude Code, while running a PostToolUse hook*
+    71→
+    72→**Pro tip:** Use the `hookify` plugin to create hooks conversationally instead of writing JSON manually. Run `/hookify` and describe what you want.
+    73→
+    74→---
+    75→
+    76→## Subagents
+    77→
+    78→Subagents are processes your orchestrator (main Claude) can delegate tasks to with limited scopes. They can run in background or foreground, freeing up context for the main agent.
+    79→
+    80→Subagents work nicely with skills - a subagent capable of executing a subset of your skills can be delegated tasks and use those skills autonomously. They can also be sandboxed with specific tool permissions.
+    81→
+    82→```bash
+    83→# Example subagent structure
+    84→~/.claude/agents/
+    85→  planner.md           # Feature implementation planning
+    86→  architect.md         # System design decisions
+    87→  tdd-guide.md         # Test-driven development
+    88→  code-reviewer.md     # Quality/security review
+    89→  security-reviewer.md # Vulnerability analysis
+    90→  build-error-resolver.md
+    91→  e2e-runner.md
+    92→  refactor-cleaner.md
+    93→```
+    94→
+    95→Configure allowed tools, MCPs, and permissions per subagent for proper scoping.
+    96→
+    97→---
+    98→
+    99→## Rules and Memory
+   100→
+   101→Your `.rules` folder holds `.md` files with best practices Claude should ALWAYS follow. Two approaches:
+   102→
+   103→1. **Single CLAUDE.md** - Everything in one file (user or project level)
+   104→2. **Rules folder** - Modular `.md` files grouped by concern
+   105→
+   106→```bash
+   107→~/.claude/rules/
+   108→  security.md      # No hardcoded secrets, validate inputs
+   109→  coding-style.md  # Immutability, file organization
+   110→  testing.md       # TDD workflow, 80% coverage
+   111→  git-workflow.md  # Commit format, PR process
+   112→  agents.md        # When to delegate to subagents
+   113→  performance.md   # Model selection, context management
+   114→```
+   115→
+   116→**Example rules:**
+   117→
+   118→- No emojis in codebase
+   119→- Refrain from purple hues in frontend
+   120→- Always test code before deployment
+   121→- Prioritize modular code over mega-files
+   122→- Never commit console.logs
+   123→
+   124→---
+   125→
+   126→## MCPs (Model Context Protocol)
+   127→
+   128→MCPs connect Claude to external services directly. Not a replacement for APIs - it's a prompt-driven wrapper around them, allowing more flexibility in navigating information.
+   129→
+   130→**Example:** Supabase MCP lets Claude pull specific data, run SQL directly upstream without copy-paste. Same for databases, deployment platforms, etc.
+   131→
+   132→![Supabase MCP listing tables](./assets/images/shortform/04-supabase-mcp.jpeg)
+   133→*Example of the Supabase MCP listing the tables within the public schema*
+   134→
+   135→**Chrome in Claude:** is a built-in plugin MCP that lets Claude autonomously control your browser - clicking around to see how things work.
+   136→
+   137→**CRITICAL: Context Window Management**
+   138→
+   139→Be picky with MCPs. I keep all MCPs in user config but **disable everything unused**. Navigate to `/plugins` and scroll down or run `/mcp`.
+   140→
+   141→![/plugins interface](./assets/images/shortform/05-plugins-interface.jpeg)
+   142→*Using /plugins to navigate to MCPs to see which ones are currently installed and their status*
+   143→
+   144→Your 200k context window before compacting might only be 70k with too many tools enabled. Performance degrades significantly.
+   145→
+   146→**Rule of thumb:** Have 20-30 MCPs in config, but keep under 10 enabled / under 80 tools active.
+   147→
+   148→```bash
+   149→# Check enabled MCPs
+   150→/mcp
+   151→
+   152→# Disable unused ones in ~/.claude.json under projects.disabledMcpServers
+   153→```
+   154→
+   155→---
+   156→
+   157→## Plugins
+   158→
+   159→Plugins package tools for easy installation instead of tedious manual setup. A plugin can be a skill + MCP combined, or hooks/tools bundled together.
+   160→
+   161→**Installing plugins:**
+   162→
+   163→```bash
+   164→# Add a marketplace
+   165→claude plugin marketplace add https://github.com/mixedbread-ai/mgrep
+   166→
+   167→# Open Claude, run /plugins, find new marketplace, install from there
+   168→```
+   169→
+   170→![Marketplaces tab showing mgrep](./assets/images/shortform/06-marketplaces-mgrep.jpeg)
+   171→*Displaying the newly installed Mixedbread-Grep marketplace*
+   172→
+   173→**LSP Plugins** are particularly useful if you run Claude Code outside editors frequently. Language Server Protocol gives Claude real-time type checking, go-to-definition, and intelligent completions without needing an IDE open.
+   174→
+   175→```bash
+   176→# Enabled plugins example
+   177→typescript-lsp@claude-plugins-official  # TypeScript intelligence
+   178→pyright-lsp@claude-plugins-official     # Python type checking
+   179→hookify@claude-plugins-official         # Create hooks conversationally
+   180→mgrep@Mixedbread-Grep                   # Better search than ripgrep
+   181→```
+   182→
+   183→Same warning as MCPs - watch your context window.
+   184→
+   185→---
+   186→
+   187→## Tips and Tricks
+   188→
+   189→### Keyboard Shortcuts
+   190→
+   191→- `Ctrl+U` - Delete entire line (faster than backspace spam)
+   192→- `!` - Quick bash command prefix
+   193→- `@` - Search for files
+   194→- `/` - Initiate slash commands
+   195→- `Shift+Enter` - Multi-line input
+   196→- `Tab` - Toggle thinking display
+   197→- `Esc Esc` - Interrupt Claude / restore code
+   198→
+   199→### Parallel Workflows
+   200→
+   201→- **Fork** (`/fork`) - Fork conversations to do non-overlapping tasks in parallel instead of spamming queued messages
+   202→- **Git Worktrees** - For overlapping parallel Claudes without conflicts. Each worktree is an independent checkout
+   203→
+   204→```bash
+   205→git worktree add ../feature-branch feature-branch
+   206→# Now run separate Claude instances in each worktree
+   207→```
+   208→
+   209→### tmux for Long-Running Commands
+   210→
+   211→Stream and watch logs/bash processes Claude runs:
+   212→
+   213→https://github.com/user-attachments/assets/shortform/07-tmux-video.mp4
+   214→
+   215→```bash
+   216→tmux new -s dev
+   217→# Claude runs commands here, you can detach and reattach
+   218→tmux attach -t dev
+   219→```
+   220→
+   221→### mgrep > grep
+   222→
+   223→`mgrep` is a significant improvement from ripgrep/grep. Install via plugin marketplace, then use the `/mgrep` skill. Works with both local search and web search.
+   224→
+   225→```bash
+   226→mgrep "function handleSubmit"  # Local search
+   227→mgrep --web "Next.js 15 app router changes"  # Web search
+   228→```
+   229→
+   230→### Other Useful Commands
+   231→
+   232→- `/rewind` - Go back to a previous state
+   233→- `/statusline` - Customize with branch, context %, todos
+   234→- `/checkpoints` - File-level undo points
+   235→- `/compact` - Manually trigger context compaction
+   236→
+   237→### GitHub Actions CI/CD
+   238→
+   239→Set up code review on your PRs with GitHub Actions. Claude can review PRs automatically when configured.
+   240→
+   241→![Claude bot approving a PR](./assets/images/shortform/08-github-pr-review.jpeg)
+   242→*Claude approving a bug fix PR*
+   243→
+   244→### Sandboxing
+   245→
+   246→Use sandbox mode for risky operations - Claude runs in restricted environment without affecting your actual system.
+   247→
+   248→---
+   249→
+   250→## On Editors
+   251→
+   252→Your editor choice significantly impacts Claude Code workflow. While Claude Code works from any terminal, pairing it with a capable editor unlocks real-time file tracking, quick navigation, and integrated command execution.
+   253→
+   254→### Zed (My Preference)
+   255→
+   256→I use [Zed](https://zed.dev) - written in Rust, so it's genuinely fast. Opens instantly, handles massive codebases without breaking a sweat, and barely touches system resources.
+   257→
+   258→**Why Zed + Claude Code is a great combo:**
+   259→
+   260→- **Speed** - Rust-based performance means no lag when Claude is rapidly editing files. Your editor keeps up
+   261→- **Agent Panel Integration** - Zed's Claude integration lets you track file changes in real-time as Claude edits. Jump between files Claude references without leaving the editor
+   262→- **CMD+Shift+R Command Palette** - Quick access to all your custom slash commands, debuggers, build scripts in a searchable UI
+   263→- **Minimal Resource Usage** - Won't compete with Claude for RAM/CPU during heavy operations. Important when running Opus
+   264→- **Vim Mode** - Full vim keybindings if that's your thing
+   265→
+   266→![Zed Editor with custom commands](./assets/images/shortform/09-zed-editor.jpeg)
+   267→*Zed Editor with custom commands dropdown using CMD+Shift+R. Following mode shown as the bullseye in the bottom right.*
+   268→
+   269→**Editor-Agnostic Tips:**
+   270→
+   271→1. **Split your screen** - Terminal with Claude Code on one side, editor on the other
+   272→2. **Ctrl + G** - quickly open the file Claude is currently working on in Zed
+   273→3. **Auto-save** - Enable autosave so Claude's file reads are always current
+   274→4. **Git integration** - Use editor's git features to review Claude's changes before committing
+   275→5. **File watchers** - Most editors auto-reload changed files, verify this is enabled
+   276→
+   277→### VSCode / Cursor
+   278→
+   279→This is also a viable choice and works well with Claude Code. You can use it in either terminal format, with automatic sync with your editor using `\ide` enabling LSP functionality (somewhat redundant with plugins now). Or you can opt for the extension which is more integrated with the Editor and has a matching UI.
+   280→
+   281→![VS Code Claude Code Extension](./assets/images/shortform/10-vscode-extension.jpeg)
+   282→*The VS Code extension provides a native graphical interface for Claude Code, integrated directly into your IDE.*
+   283→
+   284→---
+   285→
+   286→## My Setup
+   287→
+   288→### Plugins
+   289→
+   290→**Installed:** (I usually only have 4-5 of these enabled at a time)
+   291→
+   292→```markdown
+   293→ralph-wiggum@claude-code-plugins       # Loop automation
+   294→frontend-design@claude-code-plugins    # UI/UX patterns
+   295→commit-commands@claude-code-plugins    # Git workflow
+   296→security-guidance@claude-code-plugins  # Security checks
+   297→pr-review-toolkit@claude-code-plugins  # PR automation
+   298→typescript-lsp@claude-plugins-official # TS intelligence
+   299→hookify@claude-plugins-official        # Hook creation
+   300→code-simplifier@claude-plugins-official
+   301→feature-dev@claude-code-plugins
+   302→explanatory-output-style@claude-code-plugins
+   303→code-review@claude-code-plugins
+   304→context7@claude-plugins-official       # Live documentation
+   305→pyright-lsp@claude-plugins-official    # Python types
+   306→mgrep@Mixedbread-Grep                  # Better search
+   307→```
+   308→
+   309→### MCP Servers
+   310→
+   311→**Configured (User Level):**
+   312→
+   313→```json
+   314→{
+   315→  "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] },
+   316→  "firecrawl": { "command": "npx", "args": ["-y", "firecrawl-mcp"] },
+   317→  "supabase": {
+   318→    "command": "npx",
+   319→    "args": ["-y", "@supabase/mcp-server-supabase@latest", "--project-ref=YOUR_REF"]
+   320→  },
+   321→  "memory": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"] },
+   322→  "sequential-thinking": {
+   323→    "command": "npx",
+   324→    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+   325→  },
+   326→  "vercel": { "type": "http", "url": "https://mcp.vercel.com" },
+   327→  "railway": { "command": "npx", "args": ["-y", "@railway/mcp-server"] },
+   328→  "cloudflare-docs": { "type": "http", "url": "https://docs.mcp.cloudflare.com/mcp" },
+   329→  "cloudflare-workers-bindings": {
+   330→    "type": "http",
+   331→    "url": "https://bindings.mcp.cloudflare.com/mcp"
+   332→  },
+   333→  "clickhouse": { "type": "http", "url": "https://mcp.clickhouse.cloud/mcp" },
+   334→  "AbletonMCP": { "command": "uvx", "args": ["ableton-mcp"] },
+   335→  "magic": { "command": "npx", "args": ["-y", "@magicuidesign/mcp@latest"] }
+   336→}
+   337→```
+   338→
+   339→This is the key - I have 14 MCPs configured but only ~5-6 enabled per project. Keeps context window healthy.
+   340→
+   341→### Key Hooks
+   342→
+   343→```json
+   344→{
+   345→  "PreToolUse": [
+   346→    { "matcher": "npm|pnpm|yarn|cargo|pytest", "hooks": ["tmux reminder"] },
+   347→    { "matcher": "Write && .md file", "hooks": ["block unless README/CLAUDE"] },
+   348→    { "matcher": "git push", "hooks": ["open editor for review"] }
+   349→  ],
+   350→  "PostToolUse": [
+   351→    { "matcher": "Edit && .ts/.tsx/.js/.jsx", "hooks": ["prettier --write"] },
+   352→    { "matcher": "Edit && .ts/.tsx", "hooks": ["tsc --noEmit"] },
+   353→    { "matcher": "Edit", "hooks": ["grep console.log warning"] }
+   354→  ],
+   355→  "Stop": [
+   356→    { "matcher": "*", "hooks": ["check modified files for console.log"] }
+   357→  ]
+   358→}
+   359→```
+   360→
+   361→### Custom Status Line
+   362→
+   363→Shows user, directory, git branch with dirty indicator, context remaining %, model, time, and todo count:
+   364→
+   365→![Custom status line](./assets/images/shortform/11-statusline.jpeg)
+   366→*Example statusline in my Mac root directory*
+   367→
+   368→```
+   369→affoon:~ ctx:65% Opus 4.5 19:52
+   370→▌▌ plan mode on (shift+tab to cycle)
+   371→```
+   372→
+   373→### Rules Structure
+   374→
+   375→```
+   376→~/.claude/rules/
+   377→  security.md      # Mandatory security checks
+   378→  coding-style.md  # Immutability, file size limits
+   379→  testing.md       # TDD, 80% coverage
+   380→  git-workflow.md  # Conventional commits
+   381→  agents.md        # Subagent delegation rules
+   382→  patterns.md      # API response formats
+   383→  performance.md   # Model selection (Haiku vs Sonnet vs Opus)
+   384→  hooks.md         # Hook documentation
+   385→```
+   386→
+   387→### Subagents
+   388→
+   389→```
+   390→~/.claude/agents/
+   391→  planner.md           # Break down features
+   392→  architect.md         # System design
+   393→  tdd-guide.md         # Write tests first
+   394→  code-reviewer.md     # Quality review
+   395→  security-reviewer.md # Vulnerability scan
+   396→  build-error-resolver.md
+   397→  e2e-runner.md        # Playwright tests
+   398→  refactor-cleaner.md  # Dead code removal
+   399→  doc-updater.md       # Keep docs synced
+   400→```
+   401→
+   402→---
+   403→
+   404→## Key Takeaways
+   405→
+   406→1. **Don't overcomplicate** - treat configuration like fine-tuning, not architecture
+   407→2. **Context window is precious** - disable unused MCPs and plugins
+   408→3. **Parallel execution** - fork conversations, use git worktrees
+   409→4. **Automate the repetitive** - hooks for formatting, linting, reminders
+   410→5. **Scope your subagents** - limited tools = focused execution
+   411→
+   412→---
+   413→
+   414→## References
+   415→
+   416→- [Plugins Reference](https://code.claude.com/docs/en/plugins-reference)
+   417→- [Hooks Documentation](https://code.claude.com/docs/en/hooks)
+   418→- [Checkpointing](https://code.claude.com/docs/en/checkpointing)
+   419→- [Interactive Mode](https://code.claude.com/docs/en/interactive-mode)
+   420→- [Memory System](https://code.claude.com/docs/en/memory)
+   421→- [Subagents](https://code.claude.com/docs/en/sub-agents)
+   422→- [MCP Overview](https://code.claude.com/docs/en/mcp-overview)
+   423→
+   424→---
+   425→
+   426→**Note:** This is a subset of detail. See the [Longform Guide](./the-longform-guide.md) for advanced patterns.
+   427→
+   428→---
+   429→
+   430→*Won the Anthropic x Forum Ventures hackathon in NYC building [zenith.chat](https://zenith.chat) with [@DRodriguezFX](https://x.com/DRodriguezFX)*
+   431→
+
+<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>

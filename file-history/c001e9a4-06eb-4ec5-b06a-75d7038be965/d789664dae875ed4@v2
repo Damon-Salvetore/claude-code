@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------
+# run_single.sh — Launch a single NVFP4 experiment
+#
+# Usage:
+#   bash scripts/nvfp4_experiment/run_single.sh <MODEL_NAME> <MODE>
+#
+# Examples:
+#   bash scripts/nvfp4_experiment/run_single.sh Base-0.4B baseline
+#   bash scripts/nvfp4_experiment/run_single.sh GatedAttn-0.4B nvfp4
+# ---------------------------------------------------------------
+set -euo pipefail
+
+# -------- argument parsing --------
+MODEL_NAME="${1:?Usage: $0 <MODEL_NAME> <MODE>  (e.g. Base-0.4B baseline)}"
+MODE="${2:?Usage: $0 <MODEL_NAME> <MODE>  (MODE must be 'baseline' or 'nvfp4')}"
+
+if [[ "$MODE" != "baseline" && "$MODE" != "nvfp4" && "$MODE" != "nvfp4_full" && "$MODE" != "mxw4a8" ]]; then
+    echo "ERROR: MODE must be 'baseline', 'nvfp4', 'nvfp4_full', or 'mxw4a8', got '$MODE'" >&2
+    exit 1
+fi
+
+VALID_MODELS=("Base-0.4B" "GatedAttn-0.4B" "DiffAttn-0.4B" "GatedDiffAttn-0.4B")
+MODEL_VALID=false
+for m in "${VALID_MODELS[@]}"; do
+    if [[ "$MODEL_NAME" == "$m" ]]; then
+        MODEL_VALID=true
+        break
+    fi
+done
+if [[ "$MODEL_VALID" == "false" ]]; then
+    echo "ERROR: MODEL_NAME must be one of: ${VALID_MODELS[*]}, got '$MODEL_NAME'" >&2
+    exit 1
+fi
+
+# -------- derived names --------
+RUN_NAME="${MODEL_NAME}-${MODE}"
+# nnscaler uses --name as directory path; dots cause path issues (e.g. "Base-0.4B" -> "Base-0/4B")
+SAFE_NAME="${RUN_NAME//./_}"
+
+# -------- paths --------
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LOG_DIR="${PROJECT_DIR}/logs"
+SAVE_PATH="/tmp/nvfp4_runs/${RUN_NAME}"
+
+mkdir -p "$LOG_DIR"
+mkdir -p "$SAVE_PATH"
+
+LOG_FILE="${LOG_DIR}/${RUN_NAME}.log"
+
+# -------- nvfp4_mode flag --------
+if [[ "$MODE" == "baseline" ]]; then
+    NVFP4_FLAG="--nvfp4_mode 0"
+elif [[ "$MODE" == "nvfp4" ]]; then
+    NVFP4_FLAG="--nvfp4_mode 1"
+elif [[ "$MODE" == "nvfp4_full" ]]; then
+    NVFP4_FLAG="--nvfp4_mode 2"
+elif [[ "$MODE" == "mxw4a8" ]]; then
+    NVFP4_FLAG="--nvfp4_mode 3"
+fi
+
+# -------- pre-cleanup: kill any leftover processes with same run name --------
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Pre-cleanup: killing any leftover processes for ${SAFE_NAME}..."
+pgrep -f "nnscaler_train.py.*--name ${SAFE_NAME}" 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+# Also kill any torchrun that might be lingering from the same run
+pgrep -f "torchrun.*--name ${SAFE_NAME}" 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+sleep 2
+
+# -------- clean log file and nnscaler cache --------
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting experiment: ${RUN_NAME}"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Log file: ${LOG_FILE}"
+
+# Truncate old log file to avoid false detection from old content
+> "$LOG_FILE"
+
+cd "${PROJECT_DIR}/llm"
+rm -rf .nnscaler/
+
+# -------- pre-create nnscaler codegen directory --------
+# nnscaler's _prepare_namespace does mkdir, but torch.save can race before it completes.
+# Pre-creating the directory avoids "Parent directory does not exist" errors.
+mkdir -p ".nnscaler/_parallel_modules/__main__/BackBone/${SAFE_NAME}"
+
+# -------- launch training --------
+# 策略：后台启动 torchrun，轮询日志检测 wandb sync 完成（= 训练结束），
+# 然后主动杀掉整棵进程树。
+# 原因：torchrun 结束后 nnscaler fork 的 worker 子进程经常不退出，
+# 导致 torchrun 自己也不退出（wait 永远阻塞）。
+
+torchrun \
+    --nproc_per_node=4 \
+    --nnodes=1 \
+    --master_port=$((29500 + RANDOM % 100)) \
+    nnscaler_train.py \
+    --model "$MODEL_NAME" \
+    --data debug \
+    --hyperparams nvfp4_experiment \
+    --no_save \
+    --batch_size 2 \
+    --update_freq 2 \
+    --max_seq_len 4096 \
+    --seed 42 \
+    --plan_ngpus 1 \
+    --runtime_ngpus 4 \
+    --zero_group_size 4 \
+    --precision fp32 \
+    --xentropy_recompute \
+    --use_async_reducer \
+    --disable_shared_param_constraint \
+    --gpu_mem_constraint 135 \
+    --learning_rate 6e-4 \
+    --min_lr 3e-5 \
+    --warmup_iters 2000 \
+    --max_updates ${MAX_UPDATES:-10000} \
+    --wandb_project nvfp4new \
+    --wandb_entity "3259482542-south-china-university-of-technology" \
+    --name "$SAFE_NAME" \
+    --save_path "$SAVE_PATH" \
+    ${NVFP4_FLAG} \
+    > "$LOG_FILE" 2>&1 &
+
+TORCHRUN_PID=$!
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] torchrun PID: ${TORCHRUN_PID}"
+
+# Wait a moment for torchrun to actually start writing to the log
+sleep 5
+
+# 实时输出日志到 stdout
+tail -f "$LOG_FILE" &
+TAIL_PID=$!
+
+# -------- 轮询检测训练完成 --------
+# 检测日志中出现 "Synced.*W&B file"（wandb 完成同步 = 训练结束）
+# 或者 torchrun 主进程已经退出（异常退出）
+TRAIN_EXIT_CODE=0
+MAX_WAIT=7200  # 最多等 2 小时
+ELAPSED=0
+while true; do
+    # 检查 wandb sync 完成
+    if grep -q "Synced.*W&B file" "$LOG_FILE" 2>/dev/null; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Training completed (wandb synced detected)"
+        break
+    fi
+    # 检查 torchrun 是否已退出（异常情况）
+    if ! kill -0 "$TORCHRUN_PID" 2>/dev/null; then
+        wait "$TORCHRUN_PID" 2>/dev/null && TRAIN_EXIT_CODE=0 || TRAIN_EXIT_CODE=$?
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] torchrun exited early with code: ${TRAIN_EXIT_CODE}"
+        break
+    fi
+    # 超时保护
+    if [[ $ELAPSED -ge $MAX_WAIT ]]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] TIMEOUT after ${MAX_WAIT}s, killing..."
+        TRAIN_EXIT_CODE=124
+        break
+    fi
+    sleep 10
+    ELAPSED=$((ELAPSED + 10))
+done
+
+# -------- 清理所有相关进程 --------
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cleaning up processes for ${SAFE_NAME}..."
+
+# 杀 tail
+kill $TAIL_PID 2>/dev/null || true
+
+# 杀 torchrun 主进程
+kill $TORCHRUN_PID 2>/dev/null || true
+
+# 杀所有 nnscaler worker 子进程（SIGTERM）
+sleep 2
+pgrep -f "nnscaler_train.py.*--name ${SAFE_NAME}" 2>/dev/null | xargs -r kill 2>/dev/null || true
+
+# 等一下，再强制杀残留的（SIGKILL）
+sleep 3
+pgrep -f "nnscaler_train.py.*--name ${SAFE_NAME}" 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+
+# 最后确认 torchrun 也死了
+kill -9 $TORCHRUN_PID 2>/dev/null || true
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cleanup done for ${SAFE_NAME}"
+exit $TRAIN_EXIT_CODE

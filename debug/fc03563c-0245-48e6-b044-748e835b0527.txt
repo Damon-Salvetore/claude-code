@@ -1,0 +1,427 @@
+2026-03-06T15:45:03.956Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
+2026-03-06T15:45:03.956Z [DEBUG] MDM settings load completed in 1ms
+2026-03-06T15:45:03.977Z [DEBUG] [init] configureGlobalMTLS starting
+2026-03-06T15:45:03.977Z [DEBUG] [init] configureGlobalMTLS complete
+2026-03-06T15:45:03.977Z [DEBUG] [init] configureGlobalAgents starting
+2026-03-06T15:45:03.977Z [DEBUG] [init] configureGlobalAgents complete
+2026-03-06T15:45:03.985Z [DEBUG] Applying permission update: Adding 37 allow rule(s) to destination 'userSettings': ["WebFetch","WebSearch","Read","Glob","Grep","Bash(ls *)","Bash(cat *)","Bash(head *)","Bash(tail *)","Bash(wc *)","Bash(find *)","Bash(grep *)","Bash(echo *)","Bash(date *)","Bash(pwd *)","Bash(which *)","Bash(ps *)","Bash(du *)","Bash(df *)","Bash(free *)","Bash(nvidia-smi*)","Bash(git status*)","Bash(git diff*)","Bash(git log*)","Bash(git branch*)","Bash(git show*)","Bash(python3 -c *)","Bash(python3 -m py_compile *)","Bash(python -c *)","Bash(pip list*)","Bash(pip3 list*)","Bash(pip show *)","Bash(pip3 show *)","Bash(bash -n *)","Bash(mkdir *)","Bash(touch *)","Bash(sleep *)"]
+2026-03-06T15:45:03.985Z [DEBUG] Applying permission update: Adding 37 allow rule(s) to destination 'projectSettings': ["WebFetch","WebSearch","Read","Glob","Grep","Bash(ls *)","Bash(cat *)","Bash(head *)","Bash(tail *)","Bash(wc *)","Bash(find *)","Bash(grep *)","Bash(echo *)","Bash(date *)","Bash(pwd *)","Bash(which *)","Bash(ps *)","Bash(du *)","Bash(df *)","Bash(free *)","Bash(nvidia-smi*)","Bash(git status*)","Bash(git diff*)","Bash(git log*)","Bash(git branch*)","Bash(git show*)","Bash(python3 -c *)","Bash(python3 -m py_compile *)","Bash(python -c *)","Bash(pip list*)","Bash(pip3 list*)","Bash(pip show *)","Bash(pip3 show *)","Bash(bash -n *)","Bash(mkdir *)","Bash(touch *)","Bash(sleep *)"]
+2026-03-06T15:45:03.985Z [DEBUG] Applying permission update: Adding 19 allow rule(s) to destination 'localSettings': ["Bash(nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap --format=csv,noheader 2>/dev/null || echo \"nvidia-smi not available\")","Bash(nvidia-smi 2>/dev/null | head -20 || echo \"nvidia-smi not available\")","Bash(cd /home/yingbohao/llm-train/llm && python3 -c \"\nfrom arch.config import ModelArgs\nfrom arch.flop_utils import estimate_total_params\n\nconfigs = {\n    'Base-0.4B': ModelArgs\\(d_model=1024, d_ffn=3072, head=16, kv_head=4, head_dim=None, n_layers=24, vocab_size=201088, max_seq_len=4096, qk_norm=False, weight_tying=False, gated_attention=False, diff_attention=False, moe=False, yoco_cross_layers=0, universal_loop=1\\),\n    'GatedAttn-0.4B': ModelArgs\\(d_model=1024, d_ffn=3072, head=16, kv_head=4, head_dim=None, n_layers=24, vocab_size=201088, max_seq_len=4096, qk_norm=False, weight_tying=False, gated_attention=True, diff_attention=False, moe=False, yoco_cross_layers=0, universal_loop=1\\),\n    'DiffAttn-0.4B': ModelArgs\\(d_model=1024, d_ffn=3072, head=16, kv_head=4, head_dim=None, n_layers=24, vocab_size=201088, max_seq_len=4096, qk_norm=False, weight_tying=False, gated_attention=False, diff_attention=True, moe=False, yoco_cross_layers=0, universal_loop=1\\),\n    'GatedDiffAttn-0.4B': ModelArgs\\(d_model=1024, d_ffn=3072, head=16, kv_head=4, head_dim=None, n_layers=24, vocab_size=201088, max_seq_len=4096, qk_norm=False, weight_tying=False, gated_attention=True, diff_attention=True, moe=False, yoco_cross_layers=0, universal_loop=1\\),\n}\n\n# 同时计算 YOCO-0.4B 做对照\nyoco_04b = ModelArgs\\(d_model=1024, d_ffn=3072, head=16, cross_head=32, kv_head=4, head_dim=None, n_layers=24, qk_norm=False, weight_tying=False, yoco_cross_layers=12, yoco_window_size=512, moe=False\\)\n\nfor name, cfg in configs.items\\(\\):\n    params = estimate_total_params\\(cfg\\)\n    print\\(f'{name}: {params:,} params \\({params/1e9:.4f}B\\)'\\)\n\nparams_yoco = estimate_total_params\\(yoco_04b\\)\nprint\\(f'YOCO-0.4B \\(参照\\): {params_yoco:,} params \\({params_yoco/1e9:.4f}B\\)'\\)\n\")","Bash(python3 -c \"\nd_model = 1024\nd_ffn = 3072\nhead = 16\nkv_head = 4\nhead_dim = 64  # d_model // head\nn_layers = 24\nvocab_size = 201088\n\n# Embedding\nembed = vocab_size * d_model\nprint\\(f'Embedding: {embed/1e6:.1f}M'\\)\n\n# Per layer \\(Base\\)\nq_proj = d_model * \\(head * head_dim\\)  # 1024 * 1024\nk_proj = d_model * \\(kv_head * head_dim\\)  # 1024 * 256\nv_proj = d_model * \\(kv_head * head_dim\\)  # 1024 * 256\no_proj = \\(head * head_dim\\) * d_model  # 1024 * 1024\nattn_total = q_proj + k_proj + v_proj + o_proj\nprint\\(f'Attention/layer: {attn_total/1e6:.1f}M \\(Q:{q_proj/1e6:.1f}M K:{k_proj/1e6:.1f}M V:{v_proj/1e6:.1f}M O:{o_proj/1e6:.1f}M\\)'\\)\n\n# FFN per layer \\(SwiGLU: gate + up + down\\)\ngate = d_model * d_ffn  # 1024 * 3072\nup = d_model * d_ffn\ndown = d_ffn * d_model\nffn_total = gate + up + down\nprint\\(f'FFN/layer: {ffn_total/1e6:.1f}M \\(gate:{gate/1e6:.1f}M up:{up/1e6:.1f}M down:{down/1e6:.1f}M\\)'\\)\n\nlayer_total = attn_total + ffn_total\nprint\\(f'Total/layer: {layer_total/1e6:.1f}M'\\)\nprint\\(f'24 layers: {layer_total*24/1e6:.1f}M'\\)\n\n# Output head\noutput = d_model * vocab_size\nprint\\(f'Output head: {output/1e6:.1f}M'\\)\n\n# RMSNorm \\(tiny\\) \nrms = d_model * 2 * n_layers + d_model  # input_norm + post_attn_norm per layer + final norm\nprint\\(f'RMSNorm: {rms/1e6:.3f}M'\\)\n\ntotal = embed + layer_total * n_layers + output + rms\nprint\\(f'Total: {total/1e6:.1f}M = {total/1e9:.4f}B'\\)\n\")","Bash(python3 -c \"\nd_model = 1024\nhead = 16\nhead_dim = 64\nn_layers = 24\n\n# DiffAttn extra: Q翻倍 + lambda_proj\nq_extra = d_model * \\(head * head_dim\\)  # 额外的Q投影\nlambda_proj = d_model * head  # per layer\ndiff_extra_per_layer = q_extra + lambda_proj\nprint\\(f'DiffAttn extra/layer: {diff_extra_per_layer/1e6:.3f}M \\(Q额外:{q_extra/1e6:.1f}M lambda:{lambda_proj/1e6:.4f}M\\)'\\)\nprint\\(f'DiffAttn extra total: {diff_extra_per_layer * n_layers/1e6:.1f}M'\\)\n\n# GatedAttn extra: gate_proj\ngate = d_model * \\(head * head_dim\\)\nprint\\(f'GatedAttn extra/layer: {gate/1e6:.3f}M'\\)\nprint\\(f'GatedAttn extra total: {gate * n_layers/1e6:.1f}M'\\)\n\")","Bash(python3 -c \"\nimport config\n# 对比我们的模型配置和 YOCO-0.4B\nyoco = config.model_args['YOCO-0.4B']\nprint\\('YOCO-0.4B config:'\\)\nfor k, v in yoco.__dict__.items\\(\\):\n    print\\(f'  {k}: {v}'\\)\n\")","Bash(python3 -c \"\nfrom arch.config import ModelArgs\nfrom arch.flop_utils import estimate_total_params\nimport config\n\nfor name, args in config.model_args.items\\(\\):\n    total = estimate_total_params\\(args\\)\n    \n    # 计算非 embedding 参数（去掉 tok_embeddings 和 output head）\n    d_model = args.d_model\n    vocab_size = args.vocab_size\n    embed_params = vocab_size * d_model  # tok_embeddings\n    output_params = 0 if args.weight_tying else vocab_size * d_model  # output head\n    non_embed = total - embed_params - output_params\n    \n    print\\(f'{name:30s}  total={total/1e9:.3f}B  non_embed={non_embed/1e9:.3f}B  embed+output={\\(\\(embed_params+output_params\\)/1e9\\):.3f}B  vocab={vocab_size}  d_model={d_model}  layers={args.n_layers}  yoco_cross={args.yoco_cross_layers}  universal_loop={args.universal_loop}'\\)\n\")","Bash(python3 -c \"\n# Base-0.4B\ntotal = 701235200\nvocab_size = 201088\nd_model = 1024\nembed = vocab_size * d_model  # tok_embeddings\noutput = vocab_size * d_model  # output head \\(no weight tying\\)\nnon_embed = total - embed - output\nprint\\(f'Base-0.4B: total={total/1e9:.3f}B, non_embed={non_embed/1e9:.3f}B, embed+output={\\(\\(embed+output\\)/1e9\\):.3f}B'\\)\nprint\\(f'YOCO-0.4B: total=0.721B, non_embed=0.309B'\\)\nprint\\(\\)\nprint\\('差异原因: YOCO-0.4B 有 yoco_cross_layers=12'\\)\nprint\\('  - 12个 cross-attention 层只有 Q+O proj（没有 K/V proj）'\\)\nprint\\('  - 我们 Dense 模型所有 24 层都有完整的 Q/K/V/O proj'\\)\nprint\\(f'  - 额外 K+V proj per layer: 2 * {d_model} * 4 * 64 = {2*d_model*4*64/1e6:.1f}M'\\)\nprint\\(f'  - 12 layers: {12*2*d_model*4*64/1e6:.1f}M'\\)\n\")","Bash(python3 -c \"\nfrom arch.config import ModelArgs\nfrom arch.flop_utils import estimate_total_params\n\n# Base-0.4B \\(Dense, yoco_cross=0\\)\nbase = ModelArgs\\(d_model=1024, d_ffn=3072, head=16, kv_head=4, n_layers=24, vocab_size=201088, max_seq_len=4096, yoco_cross_layers=0, universal_loop=1, moe=False, weight_tying=False\\)\n\n# YOCO-0.4B\nyoco = ModelArgs\\(d_model=1024, d_ffn=3072, head=16, cross_head=32, kv_head=4, n_layers=24, vocab_size=201088, max_seq_len=4096, yoco_cross_layers=12, yoco_window_size=512, universal_loop=1, moe=False, weight_tying=False\\)\n\nd = 1024\nh = 16\nhd = 64\nkv_h = 4\n\n# Per self-attention layer \\(both have\\):\nprint\\('=== Self-attention layer \\(full Q/K/V/O\\) ==='\\)\nq = d * h * hd; print\\(f'  Q: {q/1e6:.2f}M'\\)\nk = d * kv_h * hd; print\\(f'  K: {k/1e6:.2f}M'\\)\nv = d * kv_h * hd; print\\(f'  V: {v/1e6:.2f}M'\\)\no = h * hd * d; print\\(f'  O: {o/1e6:.2f}M'\\)\nffn = 3 * d * 3072; print\\(f'  FFN: {ffn/1e6:.2f}M'\\)\ntotal_self = q+k+v+o+ffn; print\\(f'  Total: {total_self/1e6:.2f}M'\\)\n\n# YOCO cross layer \\(Q + O only, no K/V, but cross_head=32 not 16!\\)\nprint\\(\\)\nprint\\('=== YOCO cross-attention layer \\(Q/O only, cross_head=32\\) ==='\\)\ncross_h = 32\nq_cross = d * cross_h * hd; print\\(f'  Q\\(cross_head=32\\): {q_cross/1e6:.2f}M'\\)\no_cross = cross_h * hd * d; print\\(f'  O\\(cross_head=32\\): {o_cross/1e6:.2f}M'\\)\nffn_cross = 3 * d * 3072; print\\(f'  FFN: {ffn_cross/1e6:.2f}M'\\)\ntotal_cross = q_cross + o_cross + ffn_cross; print\\(f'  Total: {total_cross/1e6:.2f}M'\\)\n\n# YOCO shared K/V\nprint\\(\\)\nprint\\('=== YOCO shared K/V \\(counted once\\) ==='\\)\nshared_kv = 2 * d * kv_h * hd; print\\(f'  Shared K+V: {shared_kv/1e6:.2f}M'\\)\n\nprint\\(\\)\nprint\\('=== Totals \\(non-embedding\\) ==='\\)\nbase_non = 24 * total_self\nyoco_non = 12 * total_self + 12 * total_cross + shared_kv\nprint\\(f'  Base-0.4B:  12 self * 2 = 24 self layers = {base_non/1e6:.1f}M = {base_non/1e9:.3f}B'\\)\nprint\\(f'  YOCO-0.4B:  12 self + 12 cross + shared_kv = {yoco_non/1e6:.1f}M = {yoco_non/1e9:.3f}B'\\)\nprint\\(f'  差异来源: cross_head=32 vs head=16 → cross层的Q/O投影更大'\\)\n\")","Bash(cd /home/yingbohao/llm-train && python tests/test_nvfp4_ffn.py 2>&1)","Bash(cd /home/yingbohao/llm-train && python -c \"\nimport sys\nsys.path.insert\\(0, 'llm'\\)\nimport torch\nfrom arch.ffn import FeedForwardNetwork\n\ndevice = 'cuda'\ntorch.manual_seed\\(42\\)\nffn = FeedForwardNetwork\\(64, 192, nvfp4_mode=0\\).to\\(device\\)\nx = torch.randn\\(4, 16, 64, dtype=torch.bfloat16, device=device, requires_grad=True\\)\nresult = ffn\\(x\\)\nloss = result.float\\(\\).sum\\(\\)\nloss.backward\\(\\)\nprint\\('Baseline backward OK'\\)\nprint\\('up_proj grad shape:', ffn.up_proj.weight.grad.shape\\)\nprint\\('x grad shape:', x.grad.shape\\)\n\" 2>&1)","Bash(python -c \"\nimport sys; sys.path.insert\\(0, 'llm'\\)\nfrom config import model_args, data_args, training_args\n\nprint\\('=== Model configs ==='\\)\nfor k in model_args:\n    if '0.4B' in k:\n        a = model_args[k]\n        print\\(f'  {k}: d_model={a.d_model} d_ffn={a.d_ffn} head={a.head} kv_head={a.kv_head} n_layers={a.n_layers} gated={a.gated_attention} diff={a.diff_attention} yoco={a.yoco_cross_layers} moe={a.moe} nvfp4={a.nvfp4_mode} fp8={a.fp8_mode}'\\)\n\nprint\\(\\)\nprint\\('=== Training configs ==='\\)\nfor k, v in training_args.items\\(\\):\n    print\\(f'  {k}: lr={v.learning_rate} min_lr={v.min_lr} max_updates={v.max_updates} warmup={v.warmup_iters} update_freq={v.update_freq} seed={v.seed} save_interval={v.save_interval}'\\)\n\nprint\\(\\)\nprint\\('=== Data configs \\(nvfp4 related\\) ==='\\)\nfor k in ['debug', 'nvfp4_fineweb']:\n    print\\(f'  {k}: {data_args[k].data_path}'\\)\n\" 2>&1)","Bash(python3 -c \"import nnscaler.cli.trainer; print\\(nnscaler.cli.trainer.__file__\\)\")","Bash(chmod +x /home/yingbohao/llm-train/scripts/nvfp4_experiment/run_single.sh /home/yingbohao/llm-train/scripts/nvfp4_experiment/run_all.sh /home/yingbohao/llm-train/scripts/nvfp4_experiment/monitor.sh /home/yingbohao/llm-train/scripts/nvfp4_experiment/collect_results.py)","Bash(bash -n /home/yingbohao/llm-train/scripts/nvfp4_experiment/run_single.sh && echo \"run_single.sh: OK\" && bash -n /home/yingbohao/llm-train/scripts/nvfp4_experiment/run_all.sh && echo \"run_all.sh: OK\" && bash -n /home/yingbohao/llm-train/scripts/nvfp4_experiment/monitor.sh && echo \"monitor.sh: OK\")","Bash(cd /home/yingbohao/llm-train && python3 -c \"import py_compile; py_compile.compile\\('scripts/nvfp4_experiment/collect_results.py', doraise=True\\)\" && echo \"collect_results.py: OK\")","Bash(chmod +x /home/yingbohao/llm-train/scripts/nvfp4_experiment/run_all_sequential.sh)","Bash(cat /home/yingbohao/.claude.json | python3 -c \"\nimport json, sys\ndata = json.load\\(sys.stdin\\)\nfor proj_path, proj_data in data.get\\('projects', {}\\).items\\(\\):\n    tools = proj_data.get\\('allowedTools', []\\)\n    if tools:\n        print\\(f'{proj_path}: {tools}'\\)\n    else:\n        print\\(f'{proj_path}: 无预批准命令'\\)\n\")","Bash(ls -la /home/yingbohao/llm-train/logs/*.log 2>/dev/null | head -20)"]
+2026-03-06T15:45:03.985Z [DEBUG] [STARTUP] Loading MCP configs...
+2026-03-06T15:45:03.989Z [DEBUG] [ToolSearch:optimistic] mode=tst-auto, ENABLE_TOOL_SEARCH=undefined, result=true
+2026-03-06T15:45:03.989Z [DEBUG] [STARTUP] Running setup()...
+2026-03-06T15:45:03.996Z [DEBUG] Git remote URL: null
+2026-03-06T15:45:03.996Z [DEBUG] No git remote URL found
+2026-03-06T15:45:03.998Z [DEBUG] Loading skills from: managed=/etc/claude-code/.claude/skills, user=/home/yingbohao/.claude/skills, project=[]
+2026-03-06T15:45:03.998Z [DEBUG] Error log sink initialized
+2026-03-06T15:45:04.001Z [DEBUG] Loaded 0 unique skills (0 unconditional, 0 conditional, managed: 0, user: 0, project: 0, additional: 0, legacy commands: 0)
+2026-03-06T15:45:04.002Z [DEBUG] [STARTUP] setup() completed in 13ms
+2026-03-06T15:45:04.002Z [DEBUG] [STARTUP] Loading commands and agents...
+2026-03-06T15:45:04.009Z [DEBUG] installed_plugins.json doesn't exist, returning empty V2 object
+2026-03-06T15:45:04.009Z [DEBUG] Found 0 plugins (0 enabled, 0 disabled)
+2026-03-06T15:45:04.009Z [DEBUG] getPluginSkills: Processing 0 enabled plugins
+2026-03-06T15:45:04.009Z [DEBUG] Total plugin skills loaded: 0
+2026-03-06T15:45:04.009Z [DEBUG] Total plugin commands loaded: 0
+2026-03-06T15:45:04.009Z [DEBUG] Registered 0 hooks from 0 plugins
+2026-03-06T15:45:04.009Z [DEBUG] Total plugin agents loaded: 0
+2026-03-06T15:45:04.009Z [DEBUG] getSkills returning: 0 skill dir commands, 0 plugin skills, 5 bundled skills
+2026-03-06T15:45:04.012Z [DEBUG] [STARTUP] Commands and agents loaded in 10ms
+2026-03-06T15:45:04.016Z [DEBUG] [STARTUP] Running showSetupScreens()...
+2026-03-06T15:45:04.021Z [DEBUG] [keybindings] KeybindingSetup initialized with 104 bindings, 0 warnings
+2026-03-06T15:45:04.058Z [DEBUG] [keybindings] Skipping file watcher - user customization disabled
+2026-03-06T15:45:04.060Z [DEBUG] [Claude in Chrome] Extension not found in any browser
+2026-03-06T15:45:05.024Z [DEBUG] Not in a GitHub repository, skipping path mapping update
+2026-03-06T15:45:05.025Z [DEBUG] [Perfetto] initializePerfettoTracing called, env value: undefined
+2026-03-06T15:45:05.025Z [DEBUG] [3P telemetry] isTelemetryEnabled=false (CLAUDE_CODE_ENABLE_TELEMETRY=undefined)
+2026-03-06T15:45:05.027Z [DEBUG] [STARTUP] showSetupScreens() completed in 1011ms
+2026-03-06T15:45:05.027Z [DEBUG] [LSP MANAGER] initializeLspServerManager() called
+2026-03-06T15:45:05.027Z [DEBUG] [LSP MANAGER] Created manager instance, state=pending
+2026-03-06T15:45:05.027Z [DEBUG] [LSP MANAGER] Starting async initialization (generation 1)
+2026-03-06T15:45:05.027Z [DEBUG] Total LSP servers loaded: 0
+2026-03-06T15:45:05.027Z [ERROR] Failed to fetch org fast mode status, defaulting to disabled: Error: No auth available
+2026-03-06T15:45:05.028Z [DEBUG] [STARTUP] MCP configs loaded in 1042ms
+2026-03-06T15:45:05.029Z [DEBUG] [LSP SERVER MANAGER] getAllLspServers returned 0 server(s)
+2026-03-06T15:45:05.029Z [DEBUG] LSP manager initialized with 0 servers
+2026-03-06T15:45:05.030Z [DEBUG] Getting matching hook commands for SessionStart with query: startup
+2026-03-06T15:45:05.030Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:45:05.030Z [DEBUG] Matched 0 unique hooks for query "startup" (0 before deduplication)
+2026-03-06T15:45:05.030Z [DEBUG] Initialized versioned plugins system with 0 plugins
+2026-03-06T15:45:05.030Z [DEBUG] LSP server manager initialized successfully
+2026-03-06T15:45:05.030Z [DEBUG] LSP notification handlers registered successfully for all 0 server(s)
+2026-03-06T15:45:05.030Z [DEBUG] [Reconnection] computeInitialTeamContext: No teammate context set (not a teammate)
+2026-03-06T15:45:05.032Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1873942.1772811905032
+2026-03-06T15:45:05.032Z [DEBUG] Preserving file permissions: 100600
+2026-03-06T15:45:05.032Z [DEBUG] Temp file written successfully, size: 7231 bytes
+2026-03-06T15:45:05.032Z [DEBUG] Applied original permissions to temp file
+2026-03-06T15:45:05.032Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1873942.1772811905032 to /home/yingbohao/.claude.json
+2026-03-06T15:45:05.032Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-06T15:45:05.165Z [DEBUG] [keybindings] KeybindingSetup initialized with 104 bindings, 0 warnings
+2026-03-06T15:45:05.185Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:05.193Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:05.201Z [DEBUG] High write ratio: blit=0, write=1277 (100.0% writes), screen=19x197
+2026-03-06T15:45:05.214Z [DEBUG] [keybindings] Skipping file watcher - user customization disabled
+2026-03-06T15:45:05.214Z [DEBUG] [REPL:mount] REPL mounted, disabled=false
+2026-03-06T15:45:05.223Z [DEBUG] Official marketplace auto-install skipped: already_attempted
+2026-03-06T15:45:05.223Z [DEBUG] performStartupChecks called
+2026-03-06T15:45:05.224Z [DEBUG] Starting background plugin installations
+2026-03-06T15:45:05.227Z [DEBUG] Loaded 1 CLAUDE.md/rules files:
+  [User] /home/yingbohao/.claude/CLAUDE.md (3862 chars)
+2026-03-06T15:45:05.230Z [DEBUG] performBackgroundPluginInstallations called
+2026-03-06T15:45:05.234Z [DEBUG] [claudeai-mcp] Checking gate (cached)...
+2026-03-06T15:45:05.234Z [DEBUG] [claudeai-mcp] Gate returned: false
+2026-03-06T15:45:05.234Z [DEBUG] [claudeai-mcp] Disabled via gate
+2026-03-06T15:45:05.241Z [DEBUG] High write ratio: blit=13, write=1264 (99.0% writes), screen=19x197
+2026-03-06T15:45:05.241Z [DEBUG] Full reset (scrollback changes): scrollbackRows=7, firstChangeY=5
+  prev: "│                   ▐▛███▜▌                  │ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │                           "
+  next: "│                                            │ ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │                           "
+2026-03-06T15:45:05.244Z [DEBUG] Watching for changes in setting files /home/yingbohao/.claude/settings.json, /home/yingbohao/.claude/settings.local.json...
+2026-03-06T15:45:05.245Z [DEBUG] Setting installation status: 0 marketplaces, 0 installable plugins, 0 uninstallable plugins
+2026-03-06T15:45:05.251Z [DEBUG] Security messages are fresh (<1h old), skipping fetch
+2026-03-06T15:45:05.256Z [DEBUG] CLAUDE_CODE_WEBSOCKET_AUTH_FILE_DESCRIPTOR not set, no file descriptor token available
+2026-03-06T15:45:05.256Z [DEBUG] [claudeai-mcp] Checking gate (cached)...
+2026-03-06T15:45:05.256Z [DEBUG] [claudeai-mcp] Gate returned: false
+2026-03-06T15:45:05.256Z [DEBUG] [claudeai-mcp] Disabled via gate
+2026-03-06T15:45:05.263Z [DEBUG] MCP server "ide": Starting connection with timeout of 30000ms
+2026-03-06T15:45:05.268Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:05.272Z [DEBUG] MCP server "ide": Connection failed after 16ms: WebSocket is not open. Cannot start transport.
+2026-03-06T15:45:05.272Z [ERROR] MCP server "ide" Connection failed: WebSocket is not open. Cannot start transport.
+2026-03-06T15:45:05.288Z [DEBUG] Loaded plugins - Enabled: 0, Disabled: 0, Commands: 0, Agents: 0, Errors: 0
+2026-03-06T15:45:05.292Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:05.294Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:05.304Z [DEBUG] AutoUpdaterWrapper: Installation type: npm-global
+2026-03-06T15:45:05.313Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:13.295Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:24.520Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-03-06T15:45:24.520Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-03-06T15:45:24.521Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-03-06T15:45:24.521Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-03-06T15:45:24.521Z [DEBUG] Sending 1 skills via attachment (initial, 1 total sent)
+2026-03-06T15:45:24.523Z [WARN] [3P telemetry] Event dropped (no event logger initialized): user_prompt
+2026-03-06T15:45:24.523Z [DEBUG] Getting matching hook commands for UserPromptSubmit with query: undefined
+2026-03-06T15:45:24.523Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:45:24.523Z [DEBUG] Matched 0 unique hooks for query "no match query" (0 before deduplication)
+2026-03-06T15:45:24.524Z [DEBUG] FileHistory: Added snapshot for a467da54-daca-42d4-aa93-51203c95b8f9, tracking 0 files
+2026-03-06T15:45:24.525Z [DEBUG] [useDeferredValue] Messages deferred by 2 (0→2)
+2026-03-06T15:45:24.534Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:24.540Z [DEBUG] Plugin autoupdate: skipped (auto-updater disabled)
+2026-03-06T15:45:24.547Z [DEBUG] Total plugin output styles loaded: 0
+2026-03-06T15:45:24.551Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:24.552Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:24.552Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:24.552Z [DEBUG] autocompact: tokens=54 threshold=167000 effectiveWindow=180000
+2026-03-06T15:45:24.552Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:24.553Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:24.555Z [DEBUG] Auto tool search disabled: 0 tokens (threshold: 20000, 10% of context) [source: query]
+2026-03-06T15:45:24.575Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;
+2026-03-06T15:45:24.576Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-06T15:45:24.576Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-06T15:45:24.576Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:24.577Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-06T15:45:24.577Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:24.591Z [DEBUG] [useDeferredValue] Messages deferred by 2 (0→2)
+2026-03-06T15:45:27.911Z [DEBUG] Stream started - received first chunk
+2026-03-06T15:45:28.293Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:28.549Z [DEBUG] [useDeferredValue] Messages deferred by 1 (2→3)
+2026-03-06T15:45:28.552Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:29.265Z [DEBUG] [useDeferredValue] Messages deferred by 1 (3→4)
+2026-03-06T15:45:29.266Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:29.266Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:29.268Z [DEBUG] High write ratio: blit=0, write=1316 (100.0% writes), screen=25x197
+2026-03-06T15:45:29.277Z [DEBUG] executePreToolHooks called for tool: Bash
+2026-03-06T15:45:29.278Z [DEBUG] Getting matching hook commands for PreToolUse with query: Bash
+2026-03-06T15:45:29.278Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:45:29.278Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:29.281Z [DEBUG] tree-sitter: WASM files not found
+2026-03-06T15:45:29.304Z [DEBUG] [useDeferredValue] Messages deferred by 1 (3→4)
+2026-03-06T15:45:29.308Z [DEBUG] Creating shell snapshot for bash (/bin/bash)
+2026-03-06T15:45:29.308Z [DEBUG] Looking for shell config file: /home/yingbohao/.bashrc
+2026-03-06T15:45:29.312Z [DEBUG] Snapshots directory: /home/yingbohao/.claude/shell-snapshots
+2026-03-06T15:45:29.313Z [DEBUG] Creating snapshot at: /home/yingbohao/.claude/shell-snapshots/snapshot-bash-1772811929312-1ebyhq.sh
+2026-03-06T15:45:29.313Z [DEBUG] Execution timeout: 10000ms
+2026-03-06T15:45:29.326Z [DEBUG] Shell snapshot created successfully (2312 bytes)
+2026-03-06T15:45:29.327Z [DEBUG] No session environment scripts found
+2026-03-06T15:45:29.327Z [DEBUG] Spawning shell without login (-l flag skipped)
+2026-03-06T15:45:30.004Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1873942.1772811930004
+2026-03-06T15:45:30.004Z [DEBUG] Preserving file permissions: 100600
+2026-03-06T15:45:30.004Z [DEBUG] Temp file written successfully, size: 7231 bytes
+2026-03-06T15:45:30.004Z [DEBUG] Applied original permissions to temp file
+2026-03-06T15:45:30.004Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1873942.1772811930004 to /home/yingbohao/.claude.json
+2026-03-06T15:45:30.004Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-06T15:45:30.005Z [DEBUG] Getting matching hook commands for PostToolUse with query: Bash
+2026-03-06T15:45:30.005Z [DEBUG] Found 5 hook matchers in settings
+2026-03-06T15:45:30.005Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:30.006Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-03-06T15:45:30.006Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-03-06T15:45:30.006Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-03-06T15:45:30.006Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-03-06T15:45:30.006Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:30.007Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:30.007Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:30.007Z [DEBUG] autocompact: tokens=20646 threshold=167000 effectiveWindow=180000
+2026-03-06T15:45:30.007Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:30.007Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:30.007Z [DEBUG] Auto tool search disabled: 0 tokens (threshold: 20000, 10% of context) [source: query]
+2026-03-06T15:45:30.009Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;
+2026-03-06T15:45:30.010Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-06T15:45:30.010Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-06T15:45:30.010Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:30.010Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-06T15:45:30.010Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:30.013Z [DEBUG] [useDeferredValue] Messages deferred by 1 (4→5)
+2026-03-06T15:45:30.015Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:33.222Z [DEBUG] Stream started - received first chunk
+2026-03-06T15:45:34.159Z [DEBUG] executePreToolHooks called for tool: Bash
+2026-03-06T15:45:34.160Z [DEBUG] Getting matching hook commands for PreToolUse with query: Bash
+2026-03-06T15:45:34.160Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:45:34.160Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:34.166Z [DEBUG] [useDeferredValue] Messages deferred by 1 (5→6)
+2026-03-06T15:45:34.168Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:34.168Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:34.170Z [DEBUG] High write ratio: blit=0, write=1503 (100.0% writes), screen=31x197
+2026-03-06T15:45:34.171Z [DEBUG] Spawning shell without login (-l flag skipped)
+2026-03-06T15:45:34.853Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1873942.1772811934853
+2026-03-06T15:45:34.853Z [DEBUG] Preserving file permissions: 100600
+2026-03-06T15:45:34.853Z [DEBUG] Temp file written successfully, size: 7231 bytes
+2026-03-06T15:45:34.853Z [DEBUG] Applied original permissions to temp file
+2026-03-06T15:45:34.853Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1873942.1772811934853 to /home/yingbohao/.claude.json
+2026-03-06T15:45:34.853Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-06T15:45:34.854Z [DEBUG] Getting matching hook commands for PostToolUse with query: Bash
+2026-03-06T15:45:34.854Z [DEBUG] Found 5 hook matchers in settings
+2026-03-06T15:45:34.854Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:34.854Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-03-06T15:45:34.854Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-03-06T15:45:34.854Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-03-06T15:45:34.854Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-03-06T15:45:34.855Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:34.855Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:34.855Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:34.855Z [DEBUG] autocompact: tokens=20768 threshold=167000 effectiveWindow=180000
+2026-03-06T15:45:34.855Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:34.855Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:34.855Z [DEBUG] Auto tool search disabled: 0 tokens (threshold: 20000, 10% of context) [source: query]
+2026-03-06T15:45:34.857Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;
+2026-03-06T15:45:34.858Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-06T15:45:34.858Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-06T15:45:34.858Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:34.858Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-06T15:45:34.858Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:34.860Z [DEBUG] [useDeferredValue] Messages deferred by 1 (6→7)
+2026-03-06T15:45:34.863Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:38.590Z [DEBUG] Stream started - received first chunk
+2026-03-06T15:45:39.102Z [DEBUG] executePreToolHooks called for tool: Bash
+2026-03-06T15:45:39.103Z [DEBUG] Getting matching hook commands for PreToolUse with query: Bash
+2026-03-06T15:45:39.103Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:45:39.103Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:39.111Z [DEBUG] [useDeferredValue] Messages deferred by 1 (7→8)
+2026-03-06T15:45:39.113Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:39.113Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:39.114Z [DEBUG] Spawning shell without login (-l flag skipped)
+2026-03-06T15:45:39.118Z [DEBUG] High write ratio: blit=0, write=1883 (100.0% writes), screen=36x197
+2026-03-06T15:45:39.136Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1873942.1772811939136
+2026-03-06T15:45:39.136Z [DEBUG] Preserving file permissions: 100600
+2026-03-06T15:45:39.137Z [DEBUG] Temp file written successfully, size: 7231 bytes
+2026-03-06T15:45:39.137Z [DEBUG] Applied original permissions to temp file
+2026-03-06T15:45:39.137Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1873942.1772811939136 to /home/yingbohao/.claude.json
+2026-03-06T15:45:39.137Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-06T15:45:39.137Z [DEBUG] Getting matching hook commands for PostToolUse with query: Bash
+2026-03-06T15:45:39.137Z [DEBUG] Found 5 hook matchers in settings
+2026-03-06T15:45:39.137Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:39.138Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-03-06T15:45:39.138Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-03-06T15:45:39.138Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-03-06T15:45:39.138Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-03-06T15:45:39.138Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:39.138Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:39.138Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:39.138Z [DEBUG] autocompact: tokens=21122 threshold=167000 effectiveWindow=180000
+2026-03-06T15:45:39.138Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:39.138Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:39.138Z [DEBUG] Auto tool search disabled: 0 tokens (threshold: 20000, 10% of context) [source: query]
+2026-03-06T15:45:39.140Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;
+2026-03-06T15:45:39.141Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-06T15:45:39.141Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-06T15:45:39.141Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:39.141Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-06T15:45:39.141Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:39.143Z [DEBUG] [useDeferredValue] Messages deferred by 1 (8→9)
+2026-03-06T15:45:39.145Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.502Z [DEBUG] Stream started - received first chunk
+2026-03-06T15:45:41.881Z [DEBUG] executePreToolHooks called for tool: Bash
+2026-03-06T15:45:41.881Z [DEBUG] Getting matching hook commands for PreToolUse with query: Bash
+2026-03-06T15:45:41.881Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:45:41.881Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:41.885Z [DEBUG] [useDeferredValue] Messages deferred by 1 (9→10)
+2026-03-06T15:45:41.887Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.888Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.890Z [DEBUG] High write ratio: blit=0, write=1963 (100.0% writes), screen=39x197
+2026-03-06T15:45:41.890Z [DEBUG] Spawning shell without login (-l flag skipped)
+2026-03-06T15:45:41.903Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1873942.1772811941903
+2026-03-06T15:45:41.903Z [DEBUG] Preserving file permissions: 100600
+2026-03-06T15:45:41.904Z [DEBUG] Temp file written successfully, size: 7231 bytes
+2026-03-06T15:45:41.904Z [DEBUG] Applied original permissions to temp file
+2026-03-06T15:45:41.904Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1873942.1772811941903 to /home/yingbohao/.claude.json
+2026-03-06T15:45:41.904Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-06T15:45:41.904Z [DEBUG] Getting matching hook commands for PostToolUse with query: Bash
+2026-03-06T15:45:41.904Z [DEBUG] Found 5 hook matchers in settings
+2026-03-06T15:45:41.904Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:41.904Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-03-06T15:45:41.904Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-03-06T15:45:41.904Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-03-06T15:45:41.904Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-03-06T15:45:41.905Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.905Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.905Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.905Z [DEBUG] autocompact: tokens=22972 threshold=167000 effectiveWindow=180000
+2026-03-06T15:45:41.905Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.905Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.905Z [DEBUG] Auto tool search disabled: 0 tokens (threshold: 20000, 10% of context) [source: query]
+2026-03-06T15:45:41.907Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;
+2026-03-06T15:45:41.907Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-06T15:45:41.907Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-06T15:45:41.907Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.907Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-06T15:45:41.907Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:41.910Z [DEBUG] [useDeferredValue] Messages deferred by 1 (10→11)
+2026-03-06T15:45:41.912Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:45:44.190Z [DEBUG] Stream started - received first chunk
+2026-03-06T15:45:53.092Z [DEBUG] executePreToolHooks called for tool: Bash
+2026-03-06T15:45:53.092Z [DEBUG] Getting matching hook commands for PreToolUse with query: Bash
+2026-03-06T15:45:53.092Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:45:53.092Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:53.096Z [DEBUG] Permission suggestions for Bash: []
+2026-03-06T15:45:53.096Z [DEBUG] executePermissionRequestHooks called for tool: Bash
+2026-03-06T15:45:53.097Z [DEBUG] Getting matching hook commands for PermissionRequest with query: Bash
+2026-03-06T15:45:53.097Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:45:53.097Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:45:53.097Z [DEBUG] [useDeferredValue] Messages deferred by 1 (11→12)
+2026-03-06T15:45:53.106Z [DEBUG] High write ratio: blit=0, write=3856 (100.0% writes), screen=84x197
+2026-03-06T15:45:53.111Z [DEBUG] [useDeferredValue] Messages deferred by 1 (11→12)
+2026-03-06T15:45:59.113Z [DEBUG] Getting matching hook commands for Notification with query: permission_prompt
+2026-03-06T15:45:59.113Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:45:59.113Z [DEBUG] Matched 0 unique hooks for query "permission_prompt" (0 before deduplication)
+2026-03-06T15:47:23.497Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:23.498Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:23.500Z [DEBUG] Full reset (scrollback changes): scrollbackRows=75, firstChangeY=32
+  prev: "● Bash(# Count API requests across all conversation sessions by counting assistant messages                                                                                                          "
+  next: "  Bash(# Count API requests across all conversation sessions by counting assistant messages                                                                                                          "
+2026-03-06T15:47:23.512Z [DEBUG] Spawning shell without login (-l flag skipped)
+2026-03-06T15:47:23.601Z [DEBUG] AutoUpdaterWrapper: Installation type: npm-global
+2026-03-06T15:47:24.026Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1873942.1772812044026
+2026-03-06T15:47:24.026Z [DEBUG] Preserving file permissions: 100600
+2026-03-06T15:47:24.026Z [DEBUG] Temp file written successfully, size: 7231 bytes
+2026-03-06T15:47:24.026Z [DEBUG] Applied original permissions to temp file
+2026-03-06T15:47:24.026Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1873942.1772812044026 to /home/yingbohao/.claude.json
+2026-03-06T15:47:24.026Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-06T15:47:24.026Z [DEBUG] Getting matching hook commands for PostToolUse with query: Bash
+2026-03-06T15:47:24.026Z [DEBUG] Found 5 hook matchers in settings
+2026-03-06T15:47:24.027Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:47:24.027Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-03-06T15:47:24.027Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-03-06T15:47:24.027Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-03-06T15:47:24.027Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-03-06T15:47:24.027Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:24.027Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:24.027Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:24.027Z [DEBUG] autocompact: tokens=26230 threshold=167000 effectiveWindow=180000
+2026-03-06T15:47:24.027Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:24.027Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:24.028Z [DEBUG] Auto tool search disabled: 0 tokens (threshold: 20000, 10% of context) [source: query]
+2026-03-06T15:47:24.030Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;
+2026-03-06T15:47:24.030Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-06T15:47:24.030Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-06T15:47:24.030Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:24.030Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-06T15:47:24.031Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:24.035Z [DEBUG] [useDeferredValue] Messages deferred by 1 (12→13)
+2026-03-06T15:47:24.037Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:26.680Z [DEBUG] Stream started - received first chunk
+2026-03-06T15:47:30.888Z [ERROR] Stream completed with message_start but no content blocks completed - triggering non-streaming fallback
+2026-03-06T15:47:30.889Z [ERROR] Error streaming, falling back to non-streaming mode: Stream ended without receiving any events
+2026-03-06T15:47:30.889Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-06T15:47:30.889Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-06T15:47:30.889Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-06T15:47:30.889Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:38.941Z [DEBUG] executePreToolHooks called for tool: Bash
+2026-03-06T15:47:38.941Z [DEBUG] Getting matching hook commands for PreToolUse with query: Bash
+2026-03-06T15:47:38.941Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:47:38.941Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:47:38.954Z [DEBUG] Permission suggestions for Bash: []
+2026-03-06T15:47:38.954Z [DEBUG] executePermissionRequestHooks called for tool: Bash
+2026-03-06T15:47:38.955Z [DEBUG] Getting matching hook commands for PermissionRequest with query: Bash
+2026-03-06T15:47:38.955Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:47:38.955Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:47:38.955Z [DEBUG] [useDeferredValue] Messages deferred by 1 (13→14)
+2026-03-06T15:47:38.964Z [DEBUG] [useDeferredValue] Messages deferred by 1 (13→14)
+2026-03-06T15:47:41.980Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:41.980Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:41.981Z [DEBUG] Full reset (scrollback changes): scrollbackRows=71, firstChangeY=43
+  prev: "─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+  next: "✢ Bunning… (44s · ↓ 677 tokens)                                                                                                                                                                      "
+2026-03-06T15:47:41.991Z [DEBUG] Spawning shell without login (-l flag skipped)
+2026-03-06T15:47:42.087Z [DEBUG] AutoUpdaterWrapper: Installation type: npm-global
+2026-03-06T15:47:42.094Z [DEBUG] Writing to temp file: /home/yingbohao/.claude.json.tmp.1873942.1772812062094
+2026-03-06T15:47:42.094Z [DEBUG] Preserving file permissions: 100600
+2026-03-06T15:47:42.094Z [DEBUG] Temp file written successfully, size: 7231 bytes
+2026-03-06T15:47:42.094Z [DEBUG] Applied original permissions to temp file
+2026-03-06T15:47:42.094Z [DEBUG] Renaming /home/yingbohao/.claude.json.tmp.1873942.1772812062094 to /home/yingbohao/.claude.json
+2026-03-06T15:47:42.094Z [DEBUG] File /home/yingbohao/.claude.json written atomically
+2026-03-06T15:47:42.095Z [DEBUG] Getting matching hook commands for PostToolUse with query: Bash
+2026-03-06T15:47:42.095Z [DEBUG] Found 5 hook matchers in settings
+2026-03-06T15:47:42.095Z [DEBUG] Matched 0 unique hooks for query "Bash" (0 before deduplication)
+2026-03-06T15:47:42.095Z [DEBUG] LSP Diagnostics: getLSPDiagnosticAttachments called
+2026-03-06T15:47:42.095Z [DEBUG] LSP Diagnostics: Checking registry - 0 pending
+2026-03-06T15:47:42.095Z [DEBUG] Hooks: Found 0 total hooks in registry
+2026-03-06T15:47:42.095Z [DEBUG] Hooks: checkForNewResponses returning 0 responses
+2026-03-06T15:47:42.095Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:42.095Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:42.095Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:42.095Z [DEBUG] autocompact: tokens=27333 threshold=167000 effectiveWindow=180000
+2026-03-06T15:47:42.095Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:42.095Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:42.096Z [DEBUG] Auto tool search disabled: 0 tokens (threshold: 20000, 10% of context) [source: query]
+2026-03-06T15:47:42.098Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;
+2026-03-06T15:47:42.098Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-06T15:47:42.098Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-06T15:47:42.098Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:42.098Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-06T15:47:42.098Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:47:42.101Z [DEBUG] [useDeferredValue] Messages deferred by 1 (14→15)
+2026-03-06T15:47:42.103Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:50:05.027Z [DEBUG] Failed to check metrics opt-out status: Auth error: No API key available
+2026-03-06T15:50:05.027Z [DEBUG] Metrics export disabled by organization setting
+2026-03-06T15:51:15.303Z [ERROR] API error (attempt 1/11): 500 500 {"error":{"message":"Internal Server Error\n","type":"error"}}
+2026-03-06T15:51:15.304Z [DEBUG] [useDeferredValue] Messages deferred by 1 (15→16)
+2026-03-06T15:51:15.306Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:15.873Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:17.911Z [DEBUG] Stream started - received first chunk
+2026-03-06T15:51:25.316Z [DEBUG] [useDeferredValue] Messages deferred by 1 (16→17)
+2026-03-06T15:51:25.320Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.320Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.323Z [DEBUG] High write ratio: blit=0, write=2264 (100.0% writes), screen=51x197
+2026-03-06T15:51:25.326Z [DEBUG] Getting matching hook commands for Stop with query: undefined
+2026-03-06T15:51:25.326Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:51:25.326Z [DEBUG] Matched 0 unique hooks for query "no match query" (0 before deduplication)
+2026-03-06T15:51:25.326Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.326Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.326Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.326Z [DEBUG] autocompact: tokens=28226 threshold=167000 effectiveWindow=180000
+2026-03-06T15:51:25.326Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.326Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.327Z [DEBUG] Auto tool search disabled: 0 tokens (threshold: 20000, 10% of context) [source: query]
+2026-03-06T15:51:25.331Z [DEBUG] attribution header x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;
+2026-03-06T15:51:25.332Z [DEBUG] [API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: false, has Authorization header: false
+2026-03-06T15:51:25.332Z [DEBUG] [API:auth] OAuth token check starting
+2026-03-06T15:51:25.332Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.332Z [DEBUG] [API:auth] OAuth token check complete
+2026-03-06T15:51:25.332Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.335Z [DEBUG] [useDeferredValue] Messages deferred by 2 (16→18)
+2026-03-06T15:51:25.353Z [DEBUG] CLAUDE_CODE_MAX_OUTPUT_TOKENS Capped from 640000 to 32000
+2026-03-06T15:51:25.360Z [DEBUG] High write ratio: blit=0, write=3785 (100.0% writes), screen=92x197
+2026-03-06T15:51:31.279Z [DEBUG] Stream started - received first chunk
+2026-03-06T15:51:31.548Z [DEBUG] Forked agent [prompt_suggestion] received message: type=assistant
+2026-03-06T15:51:31.549Z [DEBUG] Getting matching hook commands for SubagentStop with query:
+2026-03-06T15:51:31.549Z [DEBUG] Found 0 hook matchers in settings
+2026-03-06T15:51:31.549Z [DEBUG] Matched 0 unique hooks for query "no match query" (0 before deduplication)
+2026-03-06T15:51:31.549Z [DEBUG] Forked agent [prompt_suggestion] finished: 1 messages, types=[assistant], totalUsage: input=798 output=16 cacheRead=27445 cacheCreate=0
+2026-03-06T15:55:05.027Z [DEBUG] Metrics export disabled by organization setting
+2026-03-06T16:15:05.229Z [DEBUG] detectFileEncoding failed for expected reason: ENOENT
